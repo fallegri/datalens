@@ -843,10 +843,10 @@ function onProviderChange() {
   if (d && !document.getElementById('aiEndpoint').value) document.getElementById('aiEndpoint').value = d.endpoint;
   if (d && !document.getElementById('aiModel').value) document.getElementById('aiModel').value = d.model;
   const hints = {
-    nvidia: 'Usa el endpoint OpenAI-compatible de NVIDIA NIM (integrate.api.nvidia.com). Requiere tu API Key de build.nvidia.com.',
-    anthropic: 'Requiere una API Key de console.anthropic.com. Nota: llamadas directas desde el navegador pueden requerir un proxy local por CORS.',
-    openai_compat: 'Cualquier servidor compatible con la API de chat completions de OpenAI (self-hosted, otros proveedores, etc).',
-    gemini: 'Requiere API Key de Google AI Studio.',
+    nvidia: 'Usa el endpoint OpenAI-compatible de NVIDIA NIM (integrate.api.nvidia.com). Requiere tu API Key de build.nvidia.com. Se enruta vía /api/ai-proxy para evitar bloqueo CORS.',
+    anthropic: 'Requiere una API Key de console.anthropic.com. Se enruta vía /api/ai-proxy (serverless) para evitar bloqueo CORS.',
+    openai_compat: 'Cualquier servidor compatible con la API de chat completions de OpenAI. Se enruta vía /api/ai-proxy.',
+    gemini: 'Requiere API Key de Google AI Studio. Se enruta vía /api/ai-proxy.',
     ollama: 'Servidor local, no requiere API Key. Asegurate de correr Ollama con CORS habilitado.',
     none: 'Sin proveedor configurado: las explicaciones se generan con un motor de reglas estadísticas local.'
   };
@@ -883,19 +883,13 @@ document.getElementById('btnAiTest').addEventListener('click', async () => {
 });
 
 /* ===================== LLAMADA A PROVEEDORES DE IA ===================== */
+// Ollama corre en la máquina del usuario: se llama directo desde el navegador
+// (llega por red local, no tiene sentido de todos modos rutear por el proxy
+// serverless de Vercel, que no puede alcanzar localhost del usuario).
+// Todo proveedor en la nube (Anthropic, NVIDIA NIM, OpenAI-compatible, Gemini)
+// se enruta a través de /api/ai-proxy para evitar el bloqueo CORS del navegador.
 async function callAiProvider(cfg, prompt) {
   if (!cfg || cfg.provider === 'none') return null;
-
-  if (cfg.provider === 'nvidia' || cfg.provider === 'openai_compat') {
-    const res = await fetch(`${cfg.endpoint.replace(/\/$/,'')}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 500, temperature: 0.3 })
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-  }
 
   if (cfg.provider === 'ollama') {
     const res = await fetch(`${cfg.endpoint.replace(/\/$/,'')}/api/chat`, {
@@ -907,27 +901,14 @@ async function callAiProvider(cfg, prompt) {
     return data.message && data.message.content;
   }
 
-  if (cfg.provider === 'anthropic') {
-    const res = await fetch(`${cfg.endpoint.replace(/\/$/,'')}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-      body: JSON.stringify({ model: cfg.model, max_tokens: 500, messages: [{ role: 'user', content: prompt }] })
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return data.content && data.content[0] && data.content[0].text;
-  }
-
-  if (cfg.provider === 'gemini') {
-    const res = await fetch(`${cfg.endpoint.replace(/\/$/,'')}/models/${cfg.model}:generateContent?key=${cfg.apiKey}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return data.candidates && data.candidates[0] && data.candidates[0].content.parts[0].text;
-  }
-  return null;
+  const res = await fetch('/api/ai-proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: cfg.provider, endpoint: cfg.endpoint, model: cfg.model, apiKey: cfg.apiKey, prompt })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status} (¿desplegaste la carpeta /api junto al HTML en Vercel?)`);
+  return data.text;
 }
 
 /* ===================== EXPLICACIÓN DE IMPACTO (IA o REGLAS) ===================== */
