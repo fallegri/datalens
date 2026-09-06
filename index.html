@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DataLens What-If · Visualizador de Limpieza de Datos</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#0b0e13;
+  --bg-panel:#12161f;
+  --bg-panel-2:#171c27;
+  --border:#232938;
+  --text:#e6e9ef;
+  --text-dim:#8b93a7;
+  --accent:#4fd1c5;
+  --accent-2:#f2b84b;
+  --danger:#e8607a;
+  --ok:#6fcf97;
+  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:var(--sans); font-size:14px; line-height:1.5;
+}
+header{
+  padding:20px 28px; border-bottom:1px solid var(--border);
+  display:flex; align-items:baseline; justify-content:space-between;
+  background:linear-gradient(180deg, var(--bg-panel), var(--bg));
+}
+header h1{font-size:18px; margin:0; font-weight:600; letter-spacing:.2px;}
+header h1 span{color:var(--accent);}
+header .sub{color:var(--text-dim); font-size:12.5px; margin-top:2px;}
+button{
+  font-family:var(--sans); cursor:pointer; border-radius:6px;
+  border:1px solid var(--border); background:var(--bg-panel-2); color:var(--text);
+  padding:8px 14px; font-size:13px; transition:border-color .15s, background .15s;
+}
+button:hover{border-color:var(--accent);}
+button.primary{background:var(--accent); color:#08110f; border-color:var(--accent); font-weight:600;}
+button.primary:hover{filter:brightness(1.08);}
+button:disabled{opacity:.4; cursor:not-allowed;}
+select, input[type=text], input[type=password], input[type=number]{
+  background:var(--bg); border:1px solid var(--border); color:var(--text);
+  border-radius:6px; padding:7px 10px; font-size:13px; font-family:var(--sans);
+}
+main{display:grid; grid-template-columns:280px 1fr; min-height:calc(100vh - 73px);}
+nav.side{
+  border-right:1px solid var(--border); padding:18px; background:var(--bg-panel);
+  display:flex; flex-direction:column; gap:18px;
+}
+.block{background:var(--bg-panel-2); border:1px solid var(--border); border-radius:10px; padding:14px;}
+.block h3{margin:0 0 10px; font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-dim); font-weight:600;}
+.dropzone{
+  border:1.5px dashed var(--border); border-radius:10px; padding:22px 14px; text-align:center;
+  color:var(--text-dim); font-size:12.5px; cursor:pointer; transition:border-color .15s;
+}
+.dropzone:hover, .dropzone.drag{border-color:var(--accent); color:var(--text);}
+.varlist{display:flex; flex-direction:column; gap:4px; max-height:260px; overflow-y:auto;}
+.varitem{
+  display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; cursor:pointer;
+  font-size:12.5px;
+}
+.varitem:hover{background:var(--bg);}
+.varitem.selected{background:rgba(79,209,197,.12); border:1px solid rgba(79,209,197,.35);}
+.varitem .type-dot{width:7px; height:7px; border-radius:50%; flex-shrink:0;}
+.varitem .name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.varitem .nullpct{color:var(--text-dim); font-family:var(--mono); font-size:10.5px;}
+.type-num{background:#4fd1c5;} .type-cat{background:#f2b84b;} .type-date{background:#9b8cf2;} .type-bool{background:#6fcf97;} .type-text{background:#8b93a7;}
+content{padding:22px 28px; display:flex; flex-direction:column; gap:20px; overflow-x:hidden;}
+.panel{background:var(--bg-panel); border:1px solid var(--border); border-radius:12px; padding:18px 20px;}
+.panel h2{margin:0 0 4px; font-size:14.5px; font-weight:600;}
+.panel .desc{color:var(--text-dim); font-size:12.5px; margin-bottom:14px;}
+.empty-state{color:var(--text-dim); text-align:center; padding:60px 20px; font-size:13.5px;}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+.stat-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; margin-top:10px;}
+.stat-card{background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 12px;}
+.stat-card .label{font-size:10.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.4px;}
+.stat-card .value{font-family:var(--mono); font-size:16px; margin-top:3px; font-weight:600;}
+.stat-card .value.delta-up{color:var(--danger);}
+.stat-card .value.delta-down{color:var(--ok);}
+canvas{max-width:100%;}
+.badge{display:inline-block; padding:2px 8px; border-radius:20px; font-size:10.5px; background:var(--bg); border:1px solid var(--border); color:var(--text-dim);}
+.badge.accent{color:var(--accent); border-color:rgba(79,209,197,.4);}
+.tech-list{display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;}
+.tech-chip{
+  padding:7px 12px; border-radius:20px; border:1px solid var(--border); background:var(--bg);
+  font-size:12px; cursor:pointer; color:var(--text-dim);
+}
+.tech-chip:hover{border-color:var(--accent-2);}
+.tech-chip.active{background:rgba(242,184,75,.14); border-color:var(--accent-2); color:var(--text);}
+.nullmatrix{display:grid; grid-auto-flow:column; grid-template-rows:repeat(20,1fr); gap:1px; height:120px; overflow-x:auto;}
+.nullcell{width:4px;}
+.nullcell.present{background:var(--accent);opacity:.55;}
+.nullcell.missing{background:var(--danger);}
+.ai-explain{background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:14px; margin-top:14px; font-size:13px; white-space:pre-wrap;}
+.ai-explain .tag{font-size:10.5px; color:var(--accent); text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px; display:block;}
+.modal-backdrop{
+  position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:50;
+}
+.modal-backdrop.open{display:flex;}
+.modal{background:var(--bg-panel); border:1px solid var(--border); border-radius:12px; padding:24px; width:440px; max-width:92vw;}
+.modal h3{margin:0 0 16px;}
+.field{margin-bottom:14px; display:flex; flex-direction:column; gap:5px;}
+.field label{font-size:12px; color:var(--text-dim);}
+.field select, .field input{width:100%;}
+.modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:8px;}
+.status-dot{width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px;}
+.status-dot.on{background:var(--ok);} .status-dot.off{background:var(--text-dim);}
+.hint{font-size:11.5px; color:var(--text-dim); margin-top:4px;}
+.small-btn{padding:4px 9px; font-size:11.5px;}
+::-webkit-scrollbar{width:8px; height:8px;} ::-webkit-scrollbar-thumb{background:var(--border); border-radius:4px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>DataLens <span>What-If</span></h1>
+    <div class="sub">Visualización de datos crudos y simulación de técnicas de limpieza</div>
+  </div>
+  <div style="display:flex; gap:10px; align-items:center;">
+    <span id="aiStatusBadge" class="badge"><span class="status-dot off"></span>IA: sin configurar</span>
+    <button id="btnAiConfig" class="small-btn">Configurar IA</button>
+  </div>
+</header>
+
+<main>
+  <nav class="side">
+    <div class="block">
+      <h3>Archivo</h3>
+      <div id="dropzone" class="dropzone">Arrastrá o hacé clic para cargar<br><span style="font-size:11px;">.xlsx, .xls, .csv</span></div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none;">
+      <div id="fileInfo" class="hint"></div>
+    </div>
+    <div class="block" id="tableBlock" style="display:none;">
+      <h3>Tabla / hoja</h3>
+      <select id="tableSelect" style="width:100%;"></select>
+    </div>
+    <div class="block" id="varBlock" style="display:none; flex:1; min-height:0;">
+      <h3>Variables <span class="hint" style="float:right;">seleccioná 1 o 2</span></h3>
+      <div class="varlist" id="varList"></div>
+    </div>
+  </nav>
+
+  <content id="content">
+    <div class="empty-state">Cargá un archivo para comenzar el análisis exploratorio what-if.</div>
+  </content>
+</main>
+
+<div class="modal-backdrop" id="aiModal">
+  <div class="modal">
+    <h3>Configuración de IA</h3>
+    <div class="field">
+      <label>Proveedor</label>
+      <select id="aiProvider">
+        <option value="none">Ninguno (motor basado en reglas)</option>
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="nvidia">NVIDIA NIM (integrate.api.nvidia.com)</option>
+        <option value="openai_compat">Otro compatible con OpenAI (custom endpoint)</option>
+        <option value="gemini">Google Gemini</option>
+        <option value="ollama">Ollama (local)</option>
+      </select>
+    </div>
+    <div class="field" id="fieldEndpoint" style="display:none;">
+      <label>Endpoint base URL</label>
+      <input type="text" id="aiEndpoint" placeholder="https://integrate.api.nvidia.com/v1">
+    </div>
+    <div class="field" id="fieldModel">
+      <label>Modelo</label>
+      <input type="text" id="aiModel" placeholder="ej: meta/llama-3.1-70b-instruct">
+    </div>
+    <div class="field" id="fieldKey">
+      <label>API Key (se guarda solo en este equipo)</label>
+      <input type="password" id="aiKey" placeholder="sk-... / tu API key">
+    </div>
+    <div class="hint" id="aiHint"></div>
+    <div class="modal-actions">
+      <button id="btnAiTest" class="small-btn">Probar conexión</button>
+      <button id="btnAiCancel">Cancelar</button>
+      <button id="btnAiSave" class="primary">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===================== ESTADO GLOBAL ===================== */
+const state = {
+  tables: {},          // { sheetName: { headers:[...], rows:[{...}] } }
+  currentTable: null,
+  columns: {},         // profiling por columna: { name: {type, nullPct, ...stats} }
+  selectedVars: [],    // hasta 2 variables seleccionadas
+  cleaned: null,       // copia de filas luego de aplicar técnica what-if
+  activeTechnique: null,
+  charts: {}           // referencias Chart.js activas para destroy()
+};
+
+const AI_DEFAULTS = {
+  nvidia:  { endpoint: 'https://integrate.api.nvidia.com/v1', model: 'meta/llama-3.1-70b-instruct' },
+  anthropic: { endpoint: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-6' },
+  openai_compat: { endpoint: '', model: '' },
+  gemini: { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-1.5-flash' },
+  ollama: { endpoint: 'http://localhost:11434', model: 'llama3.1' }
+};
+
+/* ===================== CARGA DE ARCHIVO ===================== */
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+function handleFile(file) {
+  document.getElementById('fileInfo').textContent = `Cargando "${file.name}"...`;
+  const reader = new FileReader();
+  reader.onload = (evt) => {
+    try {
+      const data = new Uint8Array(evt.target.result);
+      const wb = XLSX.read(data, { type: 'array', cellDates: true, raw: false });
+      state.tables = {};
+      wb.SheetNames.forEach(name => {
+        const rowsRaw = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: null, raw: true });
+        if (!rowsRaw.length) return;
+        const headers = Object.keys(rowsRaw[0]);
+        state.tables[name] = { headers, rows: rowsRaw };
+      });
+      const sheetNames = Object.keys(state.tables);
+      if (!sheetNames.length) {
+        document.getElementById('fileInfo').textContent = 'No se encontraron tablas con datos.';
+        return;
+      }
+      document.getElementById('fileInfo').textContent = `"${file.name}" · ${sheetNames.length} tabla(s)`;
+      populateTableSelect(sheetNames);
+      selectTable(sheetNames[0]);
+    } catch (err) {
+      document.getElementById('fileInfo').textContent = 'Error al leer el archivo: ' + err.message;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function populateTableSelect(names) {
+  const sel = document.getElementById('tableSelect');
+  sel.innerHTML = names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+  sel.onchange = () => selectTable(sel.value);
+  document.getElementById('tableBlock').style.display = 'block';
+}
+
+function selectTable(name) {
+  state.currentTable = name;
+  state.selectedVars = [];
+  state.cleaned = null;
+  profileTable(state.tables[name]);
+  renderVarList();
+  document.getElementById('varBlock').style.display = 'flex';
+  renderEmptyContent();
+}
+
+/* ===================== PERFILADO / INFERENCIA DE TIPOS ===================== */
+function profileTable(table) {
+  const { headers, rows } = table;
+  const cols = {};
+  headers.forEach(h => {
+    const values = rows.map(r => r[h]);
+    cols[h] = profileColumn(h, values);
+  });
+  state.columns = cols;
+}
+
+function profileColumn(name, values) {
+  const total = values.length;
+  const nonNull = values.filter(v => v !== null && v !== undefined && v !== '');
+  const nullCount = total - nonNull.length;
+  const type = inferType(nonNull);
+  const col = { name, type, total, nullCount, nullPct: total ? (nullCount / total * 100) : 0, values };
+
+  if (type === 'numeric') {
+    const nums = nonNull.map(Number).filter(n => !isNaN(n));
+    Object.assign(col, numericStats(nums));
+  } else if (type === 'categorical' || type === 'bool' || type === 'text') {
+    Object.assign(col, categoricalStats(nonNull));
+  } else if (type === 'date') {
+    const dates = nonNull.map(v => v instanceof Date ? v : new Date(v)).filter(d => !isNaN(d));
+    col.minDate = dates.length ? new Date(Math.min(...dates)) : null;
+    col.maxDate = dates.length ? new Date(Math.max(...dates)) : null;
+  }
+  return col;
+}
+
+function inferType(nonNullValues) {
+  if (!nonNullValues.length) return 'text';
+  const sample = nonNullValues.slice(0, 200);
+  let numCount = 0, dateCount = 0, boolCount = 0;
+  sample.forEach(v => {
+    if (v instanceof Date) dateCount++;
+    else if (typeof v === 'boolean') boolCount++;
+    else if (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v)))) numCount++;
+  });
+  const n = sample.length;
+  if (boolCount / n > 0.9) return 'bool';
+  if (dateCount / n > 0.6) return 'date';
+  if (numCount / n > 0.85) return 'numeric';
+  const uniqueRatio = new Set(sample.map(String)).size / n;
+  if (uniqueRatio < 0.5 || new Set(nonNullValues.map(String)).size <= 30) return 'categorical';
+  return 'text';
+}
+
+function numericStats(nums) {
+  if (!nums.length) return { mean: null, median: null, std: null, min: null, max: null, skew: null };
+  const n = nums.length;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mean = nums.reduce((a, b) => a + b, 0) / n;
+  const median = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  const variance = nums.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
+  const std = Math.sqrt(variance);
+  const skew = std ? (nums.reduce((a, b) => a + ((b - mean) / std) ** 3, 0) / n) : 0;
+  const q1 = sorted[Math.floor(n * 0.25)];
+  const q3 = sorted[Math.floor(n * 0.75)];
+  return { mean, median, std, min: sorted[0], max: sorted[n - 1], skew, q1, q3, sorted };
+}
+
+function categoricalStats(vals) {
+  const counts = {};
+  vals.forEach(v => { const k = String(v); counts[k] = (counts[k] || 0) + 1; });
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const total = vals.length;
+  const entropy = -entries.reduce((acc, [, c]) => { const p = c / total; return acc + p * Math.log2(p); }, 0);
+  return { counts, uniqueCount: entries.length, mode: entries[0] ? entries[0][0] : null, entropy };
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ===================== LISTA DE VARIABLES ===================== */
+function renderVarList() {
+  const list = document.getElementById('varList');
+  const cols = state.columns;
+  list.innerHTML = Object.values(cols).map(c => `
+    <div class="varitem" data-name="${escapeHtml(c.name)}">
+      <span class="type-dot type-${typeClass(c.type)}"></span>
+      <span class="name" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span>
+      <span class="nullpct">${c.nullPct.toFixed(0)}% null</span>
+    </div>`).join('');
+  list.querySelectorAll('.varitem').forEach(el => {
+    el.addEventListener('click', () => toggleVar(el.dataset.name));
+  });
+  syncVarSelectionUI();
+}
+
+function typeClass(t) { return { numeric:'num', categorical:'cat', date:'date', bool:'bool', text:'text' }[t] || 'text'; }
+
+function toggleVar(name) {
+  const idx = state.selectedVars.indexOf(name);
+  if (idx >= 0) {
+    state.selectedVars.splice(idx, 1);
+  } else {
+    if (state.selectedVars.length >= 2) state.selectedVars.shift();
+    state.selectedVars.push(name);
+  }
+  state.cleaned = null;
+  state.activeTechnique = null;
+  syncVarSelectionUI();
+  renderMainAnalysis();
+}
+
+function syncVarSelectionUI() {
+  document.querySelectorAll('.varitem').forEach(el => {
+    el.classList.toggle('selected', state.selectedVars.includes(el.dataset.name));
+  });
+}
+
+function renderEmptyContent() {
+  document.getElementById('content').innerHTML = '<div class="empty-state">Seleccioná una o dos variables en el panel izquierdo para comenzar.</div>';
+}
+
+/* ===================== SUGERENCIA DE GRÁFICO ===================== */
+function suggestChart(varNames) {
+  if (varNames.length === 0) return null;
+  if (varNames.length === 1) {
+    const t = state.columns[varNames[0]].type;
+    if (t === 'numeric') return { kind: 'histogram', reason: 'Variable numérica única → histograma para ver la forma de la distribución (asimetría, outliers, huecos).' };
+    if (t === 'categorical' || t === 'bool') return { kind: 'bar_freq', reason: 'Variable categórica → gráfico de barras de frecuencias por categoría.' };
+    if (t === 'date') return { kind: 'timeline', reason: 'Variable de fecha → serie temporal de conteo de registros por período.' };
+    return { kind: 'bar_freq', reason: 'Variable de texto con baja cardinalidad → barras de frecuencia de los valores más comunes.' };
+  }
+  const [a, b] = varNames;
+  const ta = state.columns[a].type, tb = state.columns[b].type;
+  if (ta === 'numeric' && tb === 'numeric') return { kind: 'scatter', reason: 'Dos variables numéricas → diagrama de dispersión para ver correlación y outliers conjuntos.' };
+  if ((ta === 'numeric' && (tb === 'categorical' || tb === 'bool')) || (tb === 'numeric' && (ta === 'categorical' || ta === 'bool'))) {
+    return { kind: 'grouped_stats', reason: 'Una variable numérica y una categórica → comparación de medias/medianas y dispersión por grupo (tipo boxplot simplificado).' };
+  }
+  if ((ta === 'categorical' || ta === 'bool') && (tb === 'categorical' || tb === 'bool')) {
+    return { kind: 'stacked_bar', reason: 'Dos variables categóricas → tabla cruzada como barras apiladas.' };
+  }
+  if (ta === 'date' && tb === 'numeric') return { kind: 'line_time', reason: 'Fecha + numérica → serie temporal de la variable numérica en el tiempo.' };
+  if (tb === 'date' && ta === 'numeric') return { kind: 'line_time', reason: 'Fecha + numérica → serie temporal de la variable numérica en el tiempo.' };
+  return { kind: 'bar_freq', reason: 'Combinación mixta → se muestra la distribución de la primera variable como referencia.' };
+}
+
+/* ===================== RENDER PRINCIPAL ===================== */
+function renderMainAnalysis() {
+  if (!state.selectedVars.length) { renderEmptyContent(); return; }
+  const vars = state.selectedVars;
+  const suggestion = suggestChart(vars);
+  const content = document.getElementById('content');
+
+  content.innerHTML = `
+    <div class="panel" id="profilePanel"></div>
+    <div class="panel" id="chartPanel"></div>
+    <div class="panel" id="whatifPanel"></div>
+    <div class="panel" id="comparePanel" style="display:none;"></div>
+  `;
+
+  renderProfilePanel(vars);
+  renderChartPanel(vars, suggestion);
+  renderWhatifPanel(vars);
+}
+
+function renderProfilePanel(vars) {
+  const panel = document.getElementById('profilePanel');
+  const blocks = vars.map(v => {
+    const c = state.columns[v];
+    let statsHtml = '';
+    if (c.type === 'numeric') {
+      statsHtml = `
+        <div class="stat-grid">
+          <div class="stat-card"><div class="label">Media</div><div class="value">${fmt(c.mean)}</div></div>
+          <div class="stat-card"><div class="label">Mediana</div><div class="value">${fmt(c.median)}</div></div>
+          <div class="stat-card"><div class="label">Desv. Est.</div><div class="value">${fmt(c.std)}</div></div>
+          <div class="stat-card"><div class="label">Min / Max</div><div class="value">${fmt(c.min)} / ${fmt(c.max)}</div></div>
+          <div class="stat-card"><div class="label">Asimetría</div><div class="value">${fmt(c.skew)}</div></div>
+          <div class="stat-card"><div class="label">Nulos</div><div class="value" style="color:${c.nullPct>0?'var(--danger)':'var(--ok)'}">${c.nullPct.toFixed(1)}%</div></div>
+        </div>`;
+    } else if (c.type === 'date') {
+      statsHtml = `
+        <div class="stat-grid">
+          <div class="stat-card"><div class="label">Desde</div><div class="value" style="font-size:12.5px;">${c.minDate ? c.minDate.toLocaleDateString() : '—'}</div></div>
+          <div class="stat-card"><div class="label">Hasta</div><div class="value" style="font-size:12.5px;">${c.maxDate ? c.maxDate.toLocaleDateString() : '—'}</div></div>
+          <div class="stat-card"><div class="label">Nulos</div><div class="value" style="color:${c.nullPct>0?'var(--danger)':'var(--ok)'}">${c.nullPct.toFixed(1)}%</div></div>
+        </div>`;
+    } else {
+      statsHtml = `
+        <div class="stat-grid">
+          <div class="stat-card"><div class="label">Categorías únicas</div><div class="value">${c.uniqueCount}</div></div>
+          <div class="stat-card"><div class="label">Moda</div><div class="value" style="font-size:12.5px;">${escapeHtml(String(c.mode))}</div></div>
+          <div class="stat-card"><div class="label">Entropía</div><div class="value">${fmt(c.entropy)}</div></div>
+          <div class="stat-card"><div class="label">Nulos</div><div class="value" style="color:${c.nullPct>0?'var(--danger)':'var(--ok)'}">${c.nullPct.toFixed(1)}%</div></div>
+        </div>`;
+    }
+    return `
+      <div style="flex:1; min-width:260px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+          <span class="type-dot type-${typeClass(c.type)}"></span>
+          <strong style="font-size:13.5px;">${escapeHtml(v)}</strong>
+          <span class="badge">${c.type}</span>
+        </div>
+        ${statsHtml}
+        <div class="hint" style="margin-top:8px;">Mapa de nulos (muestra de filas, orden original)</div>
+        <div class="nullmatrix">${nullMatrixCells(c.values)}</div>
+      </div>`;
+  }).join('<div style="width:1px; background:var(--border); margin:0 4px;"></div>');
+
+  panel.innerHTML = `
+    <h2>Perfil de datos en crudo</h2>
+    <div class="desc">Incluye valores nulos tal como están en el archivo original, sin ninguna limpieza aplicada.</div>
+    <div style="display:flex; gap:18px; flex-wrap:wrap;">${blocks}</div>`;
+}
+
+function nullMatrixCells(values) {
+  const sample = values.slice(0, 400);
+  return sample.map(v => {
+    const missing = v === null || v === undefined || v === '';
+    return `<div class="nullcell ${missing ? 'missing' : 'present'}"></div>`;
+  }).join('');
+}
+
+function fmt(n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  if (Math.abs(n) >= 1000) return n.toLocaleString('es-BO', { maximumFractionDigits: 1 });
+  return Number(n.toFixed(3)).toString();
+}
+
+/* ===================== PANEL DE GRÁFICO SUGERIDO ===================== */
+function renderChartPanel(vars, suggestion) {
+  const panel = document.getElementById('chartPanel');
+  panel.innerHTML = `
+    <h2>Gráfico sugerido <span class="badge accent">${chartKindLabel(suggestion.kind)}</span></h2>
+    <div class="desc">${escapeHtml(suggestion.reason)}</div>
+    <canvas id="mainChart" height="90"></canvas>`;
+  drawChart('mainChart', vars, suggestion.kind, getRows());
+}
+
+function chartKindLabel(kind) {
+  return {
+    histogram: 'Histograma', bar_freq: 'Barras de frecuencia', timeline: 'Serie temporal',
+    scatter: 'Dispersión', grouped_stats: 'Comparación por grupo', stacked_bar: 'Barras apiladas',
+    line_time: 'Línea temporal'
+  }[kind] || kind;
+}
+
+function getRows() {
+  return state.cleaned || state.tables[state.currentTable].rows;
+}
+
+function destroyChart(id) { if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; } }
+
+function chartTheme() {
+  return {
+    color: '#8b93a7',
+    grid: 'rgba(255,255,255,.06)'
+  };
+}
+
+function drawChart(canvasId, vars, kind, rows) {
+  destroyChart(canvasId);
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  const th = chartTheme();
+  const base = {
+    plugins: { legend: { labels: { color: th.color } } },
+    scales: {
+      x: { ticks: { color: th.color }, grid: { color: th.grid } },
+      y: { ticks: { color: th.color }, grid: { color: th.grid } }
+    }
+  };
+  let cfg;
+
+  if (kind === 'histogram') {
+    const vals = rows.map(r => Number(r[vars[0]])).filter(v => !isNaN(v));
+    const { labels, data } = histogramBins(vals, 20);
+    cfg = { type: 'bar', data: { labels, datasets: [{ label: vars[0], data, backgroundColor: '#4fd1c5' }] }, options: base };
+  } else if (kind === 'bar_freq') {
+    const { labels, data } = frequencyTop(rows, vars[0], 15);
+    cfg = { type: 'bar', data: { labels, datasets: [{ label: vars[0], data, backgroundColor: '#f2b84b' }] }, options: base };
+  } else if (kind === 'timeline') {
+    const { labels, data } = timelineCounts(rows, vars[0]);
+    cfg = { type: 'line', data: { labels, datasets: [{ label: 'Registros', data, borderColor: '#9b8cf2', tension: .25, fill: false }] }, options: base };
+  } else if (kind === 'line_time') {
+    const dateVar = state.columns[vars[0]].type === 'date' ? vars[0] : vars[1];
+    const numVar = dateVar === vars[0] ? vars[1] : vars[0];
+    const { labels, data } = seriesOverTime(rows, dateVar, numVar);
+    cfg = { type: 'line', data: { labels, datasets: [{ label: numVar, data, borderColor: '#4fd1c5', tension: .25, fill: false }] }, options: base };
+  } else if (kind === 'scatter') {
+    const pts = rows.map(r => ({ x: Number(r[vars[0]]), y: Number(r[vars[1]]) })).filter(p => !isNaN(p.x) && !isNaN(p.y));
+    cfg = { type: 'scatter', data: { datasets: [{ label: `${vars[0]} vs ${vars[1]}`, data: pts, backgroundColor: 'rgba(79,209,197,.65)' }] }, options: { ...base, scales: { x: { title:{display:true,text:vars[0],color:th.color}, ticks:{color:th.color}, grid:{color:th.grid} }, y: { title:{display:true,text:vars[1],color:th.color}, ticks:{color:th.color}, grid:{color:th.grid} } } } };
+  } else if (kind === 'grouped_stats') {
+    const numVar = state.columns[vars[0]].type === 'numeric' ? vars[0] : vars[1];
+    const catVar = numVar === vars[0] ? vars[1] : vars[0];
+    const { labels, means, mins, maxs } = groupedNumericStats(rows, catVar, numVar);
+    cfg = { type: 'bar', data: { labels, datasets: [
+      { label: 'Media', data: means, backgroundColor: '#4fd1c5' },
+      { label: 'Mín', data: mins, backgroundColor: '#232938' },
+      { label: 'Máx', data: maxs, backgroundColor: '#f2b84b' }
+    ] }, options: base };
+  } else if (kind === 'stacked_bar') {
+    const { labels, datasets } = crossTab(rows, vars[0], vars[1]);
+    cfg = { type: 'bar', data: { labels, datasets }, options: { ...base, scales: { x: { stacked: true, ticks:{color:th.color}, grid:{color:th.grid} }, y: { stacked: true, ticks:{color:th.color}, grid:{color:th.grid} } } } };
+  }
+  state.charts[canvasId] = new Chart(ctx, cfg);
+}
+
+function histogramBins(vals, nBins) {
+  if (!vals.length) return { labels: [], data: [] };
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const width = (max - min) / nBins || 1;
+  const bins = new Array(nBins).fill(0);
+  vals.forEach(v => { let idx = Math.floor((v - min) / width); if (idx >= nBins) idx = nBins - 1; if (idx < 0) idx = 0; bins[idx]++; });
+  const labels = bins.map((_, i) => (min + i * width).toFixed(1));
+  return { labels, data: bins };
+}
+
+function frequencyTop(rows, varName, topN) {
+  const counts = {};
+  rows.forEach(r => { const v = r[varName]; if (v === null || v === undefined || v === '') return; const k = String(v); counts[k] = (counts[k] || 0) + 1; });
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, topN);
+  return { labels: entries.map(e => e[0]), data: entries.map(e => e[1]) };
+}
+
+function timelineCounts(rows, dateVar) {
+  const counts = {};
+  rows.forEach(r => { const v = r[dateVar]; if (!v) return; const d = v instanceof Date ? v : new Date(v); if (isNaN(d)) return; const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; counts[k] = (counts[k]||0)+1; });
+  const labels = Object.keys(counts).sort();
+  return { labels, data: labels.map(l => counts[l]) };
+}
+
+function seriesOverTime(rows, dateVar, numVar) {
+  const grouped = {};
+  rows.forEach(r => { const d = r[dateVar] instanceof Date ? r[dateVar] : new Date(r[dateVar]); const n = Number(r[numVar]); if (isNaN(d) || isNaN(n)) return; const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; (grouped[k]=grouped[k]||[]).push(n); });
+  const labels = Object.keys(grouped).sort();
+  const data = labels.map(l => grouped[l].reduce((a,b)=>a+b,0) / grouped[l].length);
+  return { labels, data };
+}
+
+function groupedNumericStats(rows, catVar, numVar) {
+  const groups = {};
+  rows.forEach(r => { const c = r[catVar]; const n = Number(r[numVar]); if (c === null || c === undefined || c === '' || isNaN(n)) return; const k = String(c); (groups[k]=groups[k]||[]).push(n); });
+  const labels = Object.keys(groups).slice(0, 15);
+  const means = labels.map(l => groups[l].reduce((a,b)=>a+b,0)/groups[l].length);
+  const mins = labels.map(l => Math.min(...groups[l]));
+  const maxs = labels.map(l => Math.max(...groups[l]));
+  return { labels, means, mins, maxs };
+}
+
+function crossTab(rows, varA, varB) {
+  const setB = new Set();
+  const table = {};
+  rows.forEach(r => { const a = r[varA], b = r[varB]; if (a===null||a===undefined||a===''||b===null||b===undefined||b==='') return; const ka=String(a), kb=String(b); setB.add(kb); table[ka]=table[ka]||{}; table[ka][kb]=(table[ka][kb]||0)+1; });
+  const labels = Object.keys(table).slice(0, 15);
+  const bValues = Array.from(setB).slice(0, 8);
+  const palette = ['#4fd1c5','#f2b84b','#9b8cf2','#e8607a','#6fcf97','#5aa9e6','#e0a458','#b56576'];
+  const datasets = bValues.map((bv, i) => ({ label: bv, data: labels.map(l => (table[l] && table[l][bv]) || 0), backgroundColor: palette[i % palette.length] }));
+  return { labels, datasets };
+}
+
+/* ===================== PANEL WHAT-IF DE LIMPIEZA ===================== */
+function techniquesFor(varName) {
+  const t = state.columns[varName].type;
+  const common = [{ id: 'drop_rows', label: 'Eliminar filas con nulo' }];
+  if (t === 'numeric') return [...common,
+    { id: 'fill_mean', label: 'Rellenar con media' },
+    { id: 'fill_median', label: 'Rellenar con mediana' },
+    { id: 'fill_zero', label: 'Rellenar con 0' },
+    { id: 'interpolate', label: 'Interpolación lineal' },
+    { id: 'winsorize', label: 'Capar outliers (IQR)' }
+  ];
+  if (t === 'categorical' || t === 'bool' || t === 'text') return [...common,
+    { id: 'fill_mode', label: 'Rellenar con moda' },
+    { id: 'fill_unknown', label: 'Rellenar con "Desconocido"' },
+    { id: 'group_rare', label: 'Agrupar categorías raras en "Otros"' }
+  ];
+  if (t === 'date') return [...common,
+    { id: 'ffill', label: 'Forward-fill' },
+    { id: 'bfill', label: 'Backward-fill' }
+  ];
+  return common;
+}
+
+function renderWhatifPanel(vars) {
+  const panel = document.getElementById('whatifPanel');
+  const techBlocks = vars.map(v => `
+    <div style="flex:1; min-width:240px;">
+      <div class="hint" style="margin-bottom:6px;"><strong style="color:var(--text);">${escapeHtml(v)}</strong> — técnica de limpieza</div>
+      <div class="tech-list" data-var="${escapeHtml(v)}">
+        ${techniquesFor(v).map(t => `<div class="tech-chip" data-var="${escapeHtml(v)}" data-tech="${t.id}">${t.label}</div>`).join('')}
+      </div>
+    </div>`).join('');
+
+  panel.innerHTML = `
+    <h2>Simulación what-if de limpieza</h2>
+    <div class="desc">Elegí una técnica por variable y compará el impacto en la distribución y en las estadísticas antes de aplicarla de verdad.</div>
+    <div style="display:flex; gap:24px; flex-wrap:wrap;">${techBlocks}</div>
+    <div style="margin-top:16px; display:flex; gap:10px;">
+      <button class="primary" id="btnApplyWhatif" disabled>Aplicar y comparar</button>
+      <button id="btnResetWhatif">Restablecer</button>
+    </div>
+  `;
+  panel.querySelectorAll('.tech-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const v = chip.dataset.var;
+      panel.querySelectorAll(`.tech-chip[data-var="${CSS.escape(v)}"]`).forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      state.activeTechnique = state.activeTechnique || {};
+      state.activeTechnique[v] = chip.dataset.tech;
+      document.getElementById('btnApplyWhatif').disabled = false;
+    });
+  });
+  document.getElementById('btnApplyWhatif').addEventListener('click', applyWhatif);
+  document.getElementById('btnResetWhatif').addEventListener('click', () => {
+    state.cleaned = null; state.activeTechnique = null;
+    document.getElementById('comparePanel').style.display = 'none';
+    renderMainAnalysis();
+  });
+}
+
+function applyWhatif() {
+  const original = state.tables[state.currentTable].rows;
+  let rows = original.map(r => ({ ...r }));
+  const beforeStats = {};
+  state.selectedVars.forEach(v => beforeStats[v] = { ...profileColumn(v, rows.map(r => r[v])) });
+
+  state.selectedVars.forEach(v => {
+    const tech = state.activeTechnique && state.activeTechnique[v];
+    if (!tech) return;
+    rows = applyTechnique(rows, v, tech);
+  });
+
+  state.cleaned = rows;
+  const afterStats = {};
+  state.selectedVars.forEach(v => afterStats[v] = { ...profileColumn(v, rows.map(r => r[v])) });
+
+  renderComparePanel(beforeStats, afterStats, original, rows);
+  const suggestion = suggestChart(state.selectedVars);
+  drawChart('mainChart', state.selectedVars, suggestion.kind, rows);
+}
+
+function applyTechnique(rows, varName, tech) {
+  const type = state.columns[varName].type;
+  const isMissing = v => v === null || v === undefined || v === '';
+  if (tech === 'drop_rows') return rows.filter(r => !isMissing(r[varName]));
+
+  if (tech === 'fill_mean' || tech === 'fill_median') {
+    const nums = rows.map(r => Number(r[varName])).filter(n => !isNaN(n));
+    const stats = numericStats(nums);
+    const fillVal = tech === 'fill_mean' ? stats.mean : stats.median;
+    return rows.map(r => isMissing(r[varName]) ? { ...r, [varName]: fillVal } : r);
+  }
+  if (tech === 'fill_zero') return rows.map(r => isMissing(r[varName]) ? { ...r, [varName]: 0 } : r);
+  if (tech === 'interpolate') {
+    const out = rows.map(r => ({ ...r }));
+    for (let i = 0; i < out.length; i++) {
+      if (isMissing(out[i][varName])) {
+        let prev = null, next = null;
+        for (let j = i - 1; j >= 0; j--) if (!isMissing(out[j][varName])) { prev = { idx: j, val: Number(out[j][varName]) }; break; }
+        for (let j = i + 1; j < out.length; j++) if (!isMissing(out[j][varName])) { next = { idx: j, val: Number(out[j][varName]) }; break; }
+        if (prev && next) { const ratio = (i - prev.idx) / (next.idx - prev.idx); out[i][varName] = prev.val + (next.val - prev.val) * ratio; }
+        else if (prev) out[i][varName] = prev.val;
+        else if (next) out[i][varName] = next.val;
+      }
+    }
+    return out;
+  }
+  if (tech === 'winsorize') {
+    const nums = rows.map(r => Number(r[varName])).filter(n => !isNaN(n));
+    const stats = numericStats(nums);
+    const iqr = stats.q3 - stats.q1;
+    const lower = stats.q1 - 1.5 * iqr, upper = stats.q3 + 1.5 * iqr;
+    return rows.map(r => { const n = Number(r[varName]); if (isNaN(n)) return r; return { ...r, [varName]: Math.min(Math.max(n, lower), upper) }; });
+  }
+  if (tech === 'fill_mode') {
+    const stats = categoricalStats(rows.map(r => r[varName]).filter(v => !isMissing(v)));
+    return rows.map(r => isMissing(r[varName]) ? { ...r, [varName]: stats.mode } : r);
+  }
+  if (tech === 'fill_unknown') return rows.map(r => isMissing(r[varName]) ? { ...r, [varName]: 'Desconocido' } : r);
+  if (tech === 'group_rare') {
+    const stats = categoricalStats(rows.map(r => r[varName]).filter(v => !isMissing(v)));
+    const total = Object.values(stats.counts).reduce((a,b)=>a+b,0);
+    const rareSet = new Set(Object.entries(stats.counts).filter(([,c]) => c/total < 0.03).map(([k])=>k));
+    return rows.map(r => rareSet.has(String(r[varName])) ? { ...r, [varName]: 'Otros' } : r);
+  }
+  if (tech === 'ffill' || tech === 'bfill') {
+    const out = rows.map(r => ({ ...r }));
+    const range = tech === 'ffill' ? [...out.keys()] : [...out.keys()].reverse();
+    let last = null;
+    range.forEach(i => { if (!isMissing(out[i][varName])) last = out[i][varName]; else if (last !== null) out[i][varName] = last; });
+    return out;
+  }
+  return rows;
+}
+
+/* ===================== PANEL DE COMPARACIÓN ===================== */
+function renderComparePanel(before, after, originalRows, cleanedRows) {
+  const panel = document.getElementById('comparePanel');
+  panel.style.display = 'block';
+  const rowsHtml = state.selectedVars.map(v => statDeltaCards(v, before[v], after[v])).join('<hr style="border-color:var(--border); margin:16px 0;">');
+  panel.innerHTML = `
+    <h2>Antes vs. después</h2>
+    <div class="desc">Filas: ${originalRows.length.toLocaleString('es-BO')} originales → ${cleanedRows.length.toLocaleString('es-BO')} tras aplicar la técnica.</div>
+    ${rowsHtml}
+    <div class="ai-explain" id="aiExplainBox"><span class="tag">Impacto estadístico</span><span id="aiExplainText">Generando explicación...</span></div>
+  `;
+  generateImpactExplanation(before, after, originalRows.length, cleanedRows.length);
+}
+
+function statDeltaCards(varName, before, after) {
+  const type = before.type;
+  const rows = [];
+  const cardsFor = (label, b, a, decimals=2) => {
+    const bn = b, an = a;
+    const delta = (typeof bn === 'number' && typeof an === 'number' && bn !== 0) ? ((an - bn) / Math.abs(bn) * 100) : null;
+    const cls = delta === null ? '' : (Math.abs(delta) < 1 ? '' : (delta > 0 ? 'delta-up' : 'delta-down'));
+    return `<div class="stat-card"><div class="label">${label}</div><div class="value ${cls}">${fmt(an)}${delta!==null?` <span style="font-size:10px;">(${delta>0?'+':''}${delta.toFixed(1)}%)</span>`:''}</div></div>`;
+  };
+  let grid = '';
+  if (type === 'numeric') {
+    grid = `<div class="stat-grid">
+      ${cardsFor('Media', before.mean, after.mean)}
+      ${cardsFor('Mediana', before.median, after.median)}
+      ${cardsFor('Desv. Est.', before.std, after.std)}
+      ${cardsFor('Asimetría', before.skew, after.skew)}
+      <div class="stat-card"><div class="label">Nulos</div><div class="value">${before.nullPct.toFixed(1)}% → ${after.nullPct.toFixed(1)}%</div></div>
+    </div>`;
+  } else {
+    grid = `<div class="stat-grid">
+      <div class="stat-card"><div class="label">Únicos</div><div class="value">${before.uniqueCount} → ${after.uniqueCount}</div></div>
+      <div class="stat-card"><div class="label">Moda</div><div class="value" style="font-size:12px;">${escapeHtml(String(after.mode))}</div></div>
+      ${cardsFor('Entropía', before.entropy, after.entropy)}
+      <div class="stat-card"><div class="label">Nulos</div><div class="value">${before.nullPct.toFixed(1)}% → ${after.nullPct.toFixed(1)}%</div></div>
+    </div>`;
+  }
+  return `<div><strong style="font-size:13px;">${escapeHtml(varName)}</strong>${grid}</div>`;
+}
+
+/* ===================== CONFIGURACIÓN DE IA ===================== */
+const LS_KEY = 'datalens_whatif_ai_config_v1';
+
+function loadAiConfig() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY)) || null; } catch { return null; }
+}
+function saveAiConfig(cfg) { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); }
+
+function refreshAiStatusBadge() {
+  const cfg = loadAiConfig();
+  const badge = document.getElementById('aiStatusBadge');
+  if (!cfg || cfg.provider === 'none') {
+    badge.innerHTML = '<span class="status-dot off"></span>IA: sin configurar (reglas)';
+  } else {
+    badge.innerHTML = `<span class="status-dot on"></span>IA: ${providerLabel(cfg.provider)}`;
+  }
+}
+function providerLabel(p) {
+  return { anthropic: 'Anthropic', nvidia: 'NVIDIA NIM', openai_compat: 'Compatible OpenAI', gemini: 'Gemini', ollama: 'Ollama (local)', none: 'Reglas' }[p] || p;
+}
+
+const aiModal = document.getElementById('aiModal');
+document.getElementById('btnAiConfig').addEventListener('click', openAiModal);
+document.getElementById('btnAiCancel').addEventListener('click', () => aiModal.classList.remove('open'));
+document.getElementById('aiProvider').addEventListener('change', onProviderChange);
+
+function openAiModal() {
+  const cfg = loadAiConfig() || { provider: 'none' };
+  document.getElementById('aiProvider').value = cfg.provider || 'none';
+  onProviderChange();
+  document.getElementById('aiEndpoint').value = cfg.endpoint || '';
+  document.getElementById('aiModel').value = cfg.model || '';
+  document.getElementById('aiKey').value = cfg.apiKey || '';
+  document.getElementById('aiHint').textContent = '';
+  aiModal.classList.add('open');
+}
+
+function onProviderChange() {
+  const p = document.getElementById('aiProvider').value;
+  const showEndpoint = p === 'nvidia' || p === 'openai_compat' || p === 'ollama' || p === 'gemini';
+  document.getElementById('fieldEndpoint').style.display = showEndpoint ? 'flex' : 'none';
+  document.getElementById('fieldKey').style.display = p === 'none' || p === 'ollama' ? 'none' : 'flex';
+  const d = AI_DEFAULTS[p];
+  if (d && !document.getElementById('aiEndpoint').value) document.getElementById('aiEndpoint').value = d.endpoint;
+  if (d && !document.getElementById('aiModel').value) document.getElementById('aiModel').value = d.model;
+  const hints = {
+    nvidia: 'Usa el endpoint OpenAI-compatible de NVIDIA NIM (integrate.api.nvidia.com). Requiere tu API Key de build.nvidia.com.',
+    anthropic: 'Requiere una API Key de console.anthropic.com. Nota: llamadas directas desde el navegador pueden requerir un proxy local por CORS.',
+    openai_compat: 'Cualquier servidor compatible con la API de chat completions de OpenAI (self-hosted, otros proveedores, etc).',
+    gemini: 'Requiere API Key de Google AI Studio.',
+    ollama: 'Servidor local, no requiere API Key. Asegurate de correr Ollama con CORS habilitado.',
+    none: 'Sin proveedor configurado: las explicaciones se generan con un motor de reglas estadísticas local.'
+  };
+  document.getElementById('aiHint').textContent = hints[p] || '';
+}
+
+document.getElementById('btnAiSave').addEventListener('click', () => {
+  const cfg = {
+    provider: document.getElementById('aiProvider').value,
+    endpoint: document.getElementById('aiEndpoint').value.trim(),
+    model: document.getElementById('aiModel').value.trim(),
+    apiKey: document.getElementById('aiKey').value.trim()
+  };
+  saveAiConfig(cfg);
+  refreshAiStatusBadge();
+  aiModal.classList.remove('open');
+});
+
+document.getElementById('btnAiTest').addEventListener('click', async () => {
+  const cfg = {
+    provider: document.getElementById('aiProvider').value,
+    endpoint: document.getElementById('aiEndpoint').value.trim(),
+    model: document.getElementById('aiModel').value.trim(),
+    apiKey: document.getElementById('aiKey').value.trim()
+  };
+  const hintEl = document.getElementById('aiHint');
+  hintEl.textContent = 'Probando conexión...';
+  try {
+    const reply = await callAiProvider(cfg, 'Respondé únicamente con la palabra: OK');
+    hintEl.textContent = reply ? '✔ Conexión exitosa. Respuesta recibida del modelo.' : '✖ No se recibió respuesta.';
+  } catch (err) {
+    hintEl.textContent = '✖ Error de conexión: ' + err.message;
+  }
+});
+
+/* ===================== LLAMADA A PROVEEDORES DE IA ===================== */
+async function callAiProvider(cfg, prompt) {
+  if (!cfg || cfg.provider === 'none') return null;
+
+  if (cfg.provider === 'nvidia' || cfg.provider === 'openai_compat') {
+    const res = await fetch(`${cfg.endpoint.replace(/\/$/,'')}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 500, temperature: 0.3 })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+  }
+
+  if (cfg.provider === 'ollama') {
+    const res = await fetch(`${cfg.endpoint.replace(/\/$/,'')}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], stream: false })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.message && data.message.content;
+  }
+
+  if (cfg.provider === 'anthropic') {
+    const res = await fetch(`${cfg.endpoint.replace(/\/$/,'')}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model: cfg.model, max_tokens: 500, messages: [{ role: 'user', content: prompt }] })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.content && data.content[0] && data.content[0].text;
+  }
+
+  if (cfg.provider === 'gemini') {
+    const res = await fetch(`${cfg.endpoint.replace(/\/$/,'')}/models/${cfg.model}:generateContent?key=${cfg.apiKey}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.candidates && data.candidates[0] && data.candidates[0].content.parts[0].text;
+  }
+  return null;
+}
+
+/* ===================== EXPLICACIÓN DE IMPACTO (IA o REGLAS) ===================== */
+async function generateImpactExplanation(before, after, nBefore, nAfter) {
+  const box = document.getElementById('aiExplainText');
+  const cfg = loadAiConfig();
+  const ruleBasedText = buildRuleBasedExplanation(before, after, nBefore, nAfter);
+
+  if (!cfg || cfg.provider === 'none') {
+    box.textContent = ruleBasedText;
+    return;
+  }
+  box.textContent = 'Consultando IA (' + providerLabel(cfg.provider) + ')...';
+  const prompt = buildAiPrompt(before, after, nBefore, nAfter);
+  try {
+    const reply = await callAiProvider(cfg, prompt);
+    box.textContent = reply ? reply.trim() : ruleBasedText;
+  } catch (err) {
+    box.textContent = ruleBasedText + `\n\n(No se pudo consultar la IA configurada: ${err.message}. Se muestra el análisis basado en reglas.)`;
+  }
+}
+
+function buildAiPrompt(before, after, nBefore, nAfter) {
+  const summary = state.selectedVars.map(v => ({
+    variable: v,
+    tipo: before[v].type,
+    antes: pickStats(before[v]),
+    despues: pickStats(after[v])
+  }));
+  return `Sos un asistente de análisis de datos. Se aplicó una técnica de limpieza a un dataset (de ${nBefore} a ${nAfter} filas).
+Estadísticas antes y después por variable (JSON): ${JSON.stringify(summary)}
+Explicá en español, en un párrafo breve y concreto (máx. 120 palabras), el impacto estadístico del cambio: qué se movió, si introduce sesgo, y si la técnica parece razonable para este caso. No uses formato markdown, solo texto plano.`;
+}
+
+function pickStats(c) {
+  if (c.type === 'numeric') return { mean: c.mean, median: c.median, std: c.std, skew: c.skew, nullPct: c.nullPct };
+  return { uniqueCount: c.uniqueCount, mode: c.mode, entropy: c.entropy, nullPct: c.nullPct };
+}
+
+function buildRuleBasedExplanation(before, after, nBefore, nAfter) {
+  const lines = [];
+  const rowDelta = nAfter - nBefore;
+  if (rowDelta !== 0) lines.push(`Se ${rowDelta < 0 ? 'eliminaron' : 'agregaron'} ${Math.abs(rowDelta)} filas (${((rowDelta/nBefore)*100).toFixed(1)}% del total).`);
+  state.selectedVars.forEach(v => {
+    const b = before[v], a = after[v];
+    if (b.type === 'numeric') {
+      const meanShift = (b.mean && a.mean !== null) ? ((a.mean - b.mean) / (Math.abs(b.mean) || 1) * 100) : 0;
+      const stdShift = (b.std && a.std !== null) ? ((a.std - b.std) / (Math.abs(b.std) || 1) * 100) : 0;
+      lines.push(`"${v}": la media varió ${meanShift>=0?'+':''}${meanShift.toFixed(1)}% y la desviación estándar ${stdShift>=0?'+':''}${stdShift.toFixed(1)}%. ${Math.abs(stdShift) > 15 ? 'Ese cambio en la dispersión sugiere que la técnica podría estar comprimiendo o distorsionando la variabilidad real.' : 'La forma de la distribución se mantiene relativamente estable.'}`);
+    } else {
+      const uniqShift = a.uniqueCount - b.uniqueCount;
+      lines.push(`"${v}": las categorías únicas pasaron de ${b.uniqueCount} a ${a.uniqueCount}${uniqShift!==0?` (${uniqShift>0?'+':''}${uniqShift})`:''}. ${b.mode !== a.mode ? 'La categoría más frecuente cambió, lo que puede indicar sesgo introducido por la técnica.' : 'La categoría dominante se mantuvo igual.'}`);
+    }
+  });
+  return lines.join(' ');
+}
+
+/* ===================== INIT ===================== */
+refreshAiStatusBadge();
+
+</script>
+</body>
+</html>
