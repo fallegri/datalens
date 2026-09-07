@@ -141,7 +141,7 @@ canvas{max-width:100%;}
       <select id="tableSelect" style="width:100%;"></select>
     </div>
     <div class="block" id="varBlock" style="display:none; flex:1; min-height:0;">
-      <h3>Variables <span class="hint" style="float:right;">seleccioná 1 o 2</span></h3>
+      <h3>Variables <span class="hint" style="float:right;">seleccioná 1 a 3</span></h3>
       <div class="varlist" id="varList"></div>
     </div>
   </nav>
@@ -496,7 +496,7 @@ function toggleVar(name) {
   if (idx >= 0) {
     state.selectedVars.splice(idx, 1);
   } else {
-    if (state.selectedVars.length >= 2) state.selectedVars.shift();
+    if (state.selectedVars.length >= 3) state.selectedVars.shift();
     state.selectedVars.push(name);
   }
   state.cleaned = null;
@@ -519,24 +519,52 @@ function renderEmptyContent() {
 function suggestChart(varNames) {
   if (varNames.length === 0) return null;
   if (varNames.length === 1) {
-    const t = state.columns[varNames[0]].type;
+    const c = state.columns[varNames[0]];
+    const t = c.type;
     if (t === 'numeric') return { kind: 'histogram', reason: 'Variable numérica única → histograma para ver la forma de la distribución (asimetría, outliers, huecos).' };
-    if (t === 'categorical' || t === 'bool') return { kind: 'bar_freq', reason: 'Variable categórica → gráfico de barras de frecuencias por categoría.' };
+    if (t === 'categorical' || t === 'bool') {
+      if (c.uniqueCount <= 6) return { kind: 'pie', reason: `Variable categórica con pocas categorías (${c.uniqueCount}) → gráfico de torta, adecuado para ver composición de un total. Con más categorías se vuelve ilegible y conviene barras.` };
+      return { kind: 'bar_freq', reason: `Variable categórica con ${c.uniqueCount} categorías → barras de frecuencia (una torta con tantas porciones no se puede leer bien).` };
+    }
     if (t === 'date') return { kind: 'timeline', reason: 'Variable de fecha → serie temporal de conteo de registros por período.' };
     return { kind: 'bar_freq', reason: 'Variable de texto con baja cardinalidad → barras de frecuencia de los valores más comunes.' };
   }
-  const [a, b] = varNames;
-  const ta = state.columns[a].type, tb = state.columns[b].type;
-  if (ta === 'numeric' && tb === 'numeric') return { kind: 'scatter', reason: 'Dos variables numéricas → diagrama de dispersión para ver correlación y outliers conjuntos.' };
-  if ((ta === 'numeric' && (tb === 'categorical' || tb === 'bool')) || (tb === 'numeric' && (ta === 'categorical' || ta === 'bool'))) {
-    return { kind: 'grouped_stats', reason: 'Una variable numérica y una categórica → comparación de medias/medianas y dispersión por grupo (tipo boxplot simplificado).' };
+  if (varNames.length === 2) {
+    const [a, b] = varNames;
+    const ta = state.columns[a].type, tb = state.columns[b].type;
+    if (ta === 'numeric' && tb === 'numeric') return { kind: 'scatter', reason: 'Dos variables numéricas → diagrama de dispersión para ver correlación y outliers conjuntos.' };
+    if ((ta === 'numeric' && (tb === 'categorical' || tb === 'bool')) || (tb === 'numeric' && (ta === 'categorical' || ta === 'bool'))) {
+      return { kind: 'grouped_stats', reason: 'Una variable numérica y una categórica → comparación de medias/medianas y dispersión por grupo (tipo boxplot simplificado).' };
+    }
+    if ((ta === 'categorical' || ta === 'bool') && (tb === 'categorical' || tb === 'bool')) {
+      return { kind: 'stacked_bar', reason: 'Dos variables categóricas → tabla cruzada como barras apiladas.' };
+    }
+    if (ta === 'date' && tb === 'numeric') return { kind: 'line_time', reason: 'Fecha + numérica → serie temporal de la variable numérica en el tiempo.' };
+    if (tb === 'date' && ta === 'numeric') return { kind: 'line_time', reason: 'Fecha + numérica → serie temporal de la variable numérica en el tiempo.' };
+    return { kind: 'bar_freq', reason: 'Combinación mixta → se muestra la distribución de la primera variable como referencia.' };
   }
-  if ((ta === 'categorical' || ta === 'bool') && (tb === 'categorical' || tb === 'bool')) {
-    return { kind: 'stacked_bar', reason: 'Dos variables categóricas → tabla cruzada como barras apiladas.' };
+
+  // 3 variables
+  const numericVars = varNames.filter(v => state.columns[v].type === 'numeric');
+  const catVars = varNames.filter(v => ['categorical', 'bool'].includes(state.columns[v].type));
+  const dateVars = varNames.filter(v => state.columns[v].type === 'date');
+
+  if (numericVars.length === 3) {
+    return { kind: 'heatmap', reason: '3 variables numéricas → mapa de calor de correlación por pares (Pearson). Es lo que mejor escala cuando hay 3+ numéricas a la vez.' };
   }
-  if (ta === 'date' && tb === 'numeric') return { kind: 'line_time', reason: 'Fecha + numérica → serie temporal de la variable numérica en el tiempo.' };
-  if (tb === 'date' && ta === 'numeric') return { kind: 'line_time', reason: 'Fecha + numérica → serie temporal de la variable numérica en el tiempo.' };
-  return { kind: 'bar_freq', reason: 'Combinación mixta → se muestra la distribución de la primera variable como referencia.' };
+  if (dateVars.length === 1 && numericVars.length === 2) {
+    return { kind: 'multi_line_time', reason: 'Fecha + 2 numéricas → serie temporal multi-línea, una línea por variable numérica.' };
+  }
+  if (dateVars.length === 1 && catVars.length === 1 && numericVars.length === 1) {
+    return { kind: 'line_time_grouped', reason: 'Fecha + categórica + numérica → serie temporal con una línea por categoría.' };
+  }
+  if (numericVars.length === 2 && catVars.length === 1) {
+    return { kind: 'scatter_colored', reason: '2 numéricas + 1 categórica → dispersión coloreada por grupo, para ver si la relación entre ambas numéricas cambia según la categoría.' };
+  }
+  if (catVars.length >= 2) {
+    return { kind: 'crosstab_table', reason: 'Con 2+ variables categóricas combinadas, un solo gráfico deja de ser legible → se muestra una tabla resumen por combinación en su lugar.' };
+  }
+  return { kind: 'bar_freq', reason: 'Combinación de 3 variables sin un gráfico único claro → se muestra la distribución de la primera como referencia.' };
 }
 
 /* ===================== RENDER PRINCIPAL ===================== */
@@ -628,15 +656,25 @@ function renderChartPanel(vars, suggestion) {
   panel.innerHTML = `
     <h2>Gráfico sugerido <span class="badge accent">${chartKindLabel(suggestion.kind)}</span></h2>
     <div class="desc">${escapeHtml(suggestion.reason)}</div>
-    <canvas id="mainChart" height="90"></canvas>`;
-  drawChart('mainChart', vars, suggestion.kind, getRows());
+    <div id="chartArea"></div>`;
+  renderChartArea(vars, suggestion.kind, getRows());
+}
+
+function renderChartArea(vars, kind, rows) {
+  const area = document.getElementById('chartArea');
+  if (kind === 'heatmap') { area.innerHTML = renderCorrelationHeatmapHtml(vars, rows); return; }
+  if (kind === 'crosstab_table') { area.innerHTML = renderCrosstabTableHtml(vars, rows); return; }
+  area.innerHTML = '<canvas id="mainChart" height="90"></canvas>';
+  drawChart('mainChart', vars, kind, rows);
 }
 
 function chartKindLabel(kind) {
   return {
     histogram: 'Histograma', bar_freq: 'Barras de frecuencia', timeline: 'Serie temporal',
     scatter: 'Dispersión', grouped_stats: 'Comparación por grupo', stacked_bar: 'Barras apiladas',
-    line_time: 'Línea temporal'
+    line_time: 'Línea temporal', pie: 'Torta', heatmap: 'Mapa de calor (correlación)',
+    multi_line_time: 'Serie temporal multi-línea', line_time_grouped: 'Serie temporal por categoría',
+    scatter_colored: 'Dispersión coloreada por grupo', crosstab_table: 'Tabla resumen por combinación'
   }[kind] || kind;
 }
 
@@ -696,8 +734,134 @@ function drawChart(canvasId, vars, kind, rows) {
   } else if (kind === 'stacked_bar') {
     const { labels, datasets } = crossTab(rows, vars[0], vars[1]);
     cfg = { type: 'bar', data: { labels, datasets }, options: { ...base, scales: { x: { stacked: true, ticks:{color:th.color}, grid:{color:th.grid} }, y: { stacked: true, ticks:{color:th.color}, grid:{color:th.grid} } } } };
+  } else if (kind === 'pie') {
+    const { labels, data } = frequencyTop(rows, vars[0], 10);
+    const palette = ['#4fd1c5','#f2b84b','#9b8cf2','#e8607a','#6fcf97','#5aa9e6','#e0a458','#b56576'];
+    cfg = { type: 'doughnut', data: { labels, datasets: [{ data, backgroundColor: labels.map((_, i) => palette[i % palette.length]) }] }, options: { plugins: { legend: { position: 'right', labels: { color: th.color } } } } };
+  } else if (kind === 'multi_line_time') {
+    const dateVar = vars.find(v => state.columns[v].type === 'date');
+    const numVars = vars.filter(v => v !== dateVar);
+    const palette = ['#4fd1c5','#f2b84b','#9b8cf2'];
+    const seriesData = {}; numVars.forEach(nv => seriesData[nv] = {});
+    rows.forEach(r => {
+      const d = r[dateVar] instanceof Date ? r[dateVar] : new Date(r[dateVar]);
+      if (isNaN(d)) return;
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      numVars.forEach(nv => { const n = Number(r[nv]); if (!isNaN(n)) (seriesData[nv][k] = seriesData[nv][k] || []).push(n); });
+    });
+    const labelsSet = new Set();
+    numVars.forEach(nv => Object.keys(seriesData[nv]).forEach(k => labelsSet.add(k)));
+    const labels = Array.from(labelsSet).sort();
+    const datasets = numVars.map((nv, i) => ({
+      label: nv, borderColor: palette[i % palette.length], tension: .25, fill: false, spanGaps: true,
+      data: labels.map(l => seriesData[nv][l] ? seriesData[nv][l].reduce((a, b) => a + b, 0) / seriesData[nv][l].length : null)
+    }));
+    cfg = { type: 'line', data: { labels, datasets }, options: base };
+  } else if (kind === 'line_time_grouped') {
+    const dateVar = vars.find(v => state.columns[v].type === 'date');
+    const catVar = vars.find(v => ['categorical', 'bool'].includes(state.columns[v].type));
+    const numVar = vars.find(v => v !== dateVar && v !== catVar);
+    const palette = ['#4fd1c5','#f2b84b','#9b8cf2','#e8607a','#6fcf97','#5aa9e6','#e0a458','#b56576'];
+    const grouped = {};
+    rows.forEach(r => {
+      const d = r[dateVar] instanceof Date ? r[dateVar] : new Date(r[dateVar]);
+      const c = r[catVar], n = Number(r[numVar]);
+      if (isNaN(d) || c === null || c === undefined || c === '' || isNaN(n)) return;
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const ck = String(c);
+      grouped[ck] = grouped[ck] || {};
+      (grouped[ck][k] = grouped[ck][k] || []).push(n);
+    });
+    const cats = Object.keys(grouped).slice(0, 8);
+    const labelsSet = new Set();
+    cats.forEach(c => Object.keys(grouped[c]).forEach(k => labelsSet.add(k)));
+    const labels = Array.from(labelsSet).sort();
+    const datasets = cats.map((c, i) => ({
+      label: c, borderColor: palette[i % palette.length], tension: .25, fill: false, spanGaps: true,
+      data: labels.map(l => grouped[c][l] ? grouped[c][l].reduce((a, b) => a + b, 0) / grouped[c][l].length : null)
+    }));
+    cfg = { type: 'line', data: { labels, datasets }, options: base };
+  } else if (kind === 'scatter_colored') {
+    const catVar = vars.find(v => ['categorical', 'bool'].includes(state.columns[v].type));
+    const [xVar, yVar] = vars.filter(v => v !== catVar);
+    const palette = ['#4fd1c5','#f2b84b','#9b8cf2','#e8607a','#6fcf97','#5aa9e6','#e0a458','#b56576'];
+    const groups = {};
+    rows.forEach(r => {
+      const c = r[catVar], x = Number(r[xVar]), y = Number(r[yVar]);
+      if (c === null || c === undefined || c === '' || isNaN(x) || isNaN(y)) return;
+      const ck = String(c);
+      (groups[ck] = groups[ck] || []).push({ x, y });
+    });
+    const cats = Object.keys(groups).slice(0, 8);
+    const datasets = cats.map((c, i) => ({ label: c, data: groups[c], backgroundColor: palette[i % palette.length] }));
+    cfg = { type: 'scatter', data: { datasets }, options: { ...base, scales: { x: { title: { display: true, text: xVar, color: th.color }, ticks: { color: th.color }, grid: { color: th.grid } }, y: { title: { display: true, text: yVar, color: th.color }, ticks: { color: th.color }, grid: { color: th.grid } } } } };
   }
   state.charts[canvasId] = new Chart(ctx, cfg);
+}
+
+/* ===================== VISUALIZACIONES SIN CANVAS (HTML PROPIO) ===================== */
+function pearsonCorrelation(xs, ys) {
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; num += dx * dy; dx2 += dx * dx; dy2 += dy * dy; }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom ? num / denom : 0;
+}
+
+function pairedNumericSeries(rows, a, b) {
+  const xs = [], ys = [];
+  rows.forEach(r => { const x = Number(r[a]), y = Number(r[b]); if (!isNaN(x) && !isNaN(y)) { xs.push(x); ys.push(y); } });
+  return { xs, ys };
+}
+
+function renderCorrelationHeatmapHtml(vars, rows) {
+  let html = '<table style="border-collapse:collapse; font-size:12.5px;"><tr><td></td>' +
+    vars.map(v => `<td style="padding:8px 12px; color:var(--text-dim); font-size:11px;">${escapeHtml(v)}</td>`).join('') + '</tr>';
+  vars.forEach(a => {
+    html += `<tr><td style="padding:8px 12px; color:var(--text-dim); font-size:11px; white-space:nowrap;">${escapeHtml(a)}</td>`;
+    vars.forEach(b => {
+      let r;
+      if (a === b) r = 1;
+      else { const { xs, ys } = pairedNumericSeries(rows, a, b); r = xs.length > 1 ? pearsonCorrelation(xs, ys) : 0; }
+      const intensity = Math.min(Math.abs(r), 1);
+      const color = r >= 0 ? `rgba(79,209,197,${0.15 + intensity * 0.7})` : `rgba(232,96,122,${0.15 + intensity * 0.7})`;
+      html += `<td style="padding:16px; text-align:center; background:${color}; border-radius:6px; font-family:var(--mono); font-weight:600; min-width:70px;">${r.toFixed(2)}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</table>';
+  return `<div style="overflow-x:auto;">${html}</div><div class="hint" style="margin-top:10px;">Correlación de Pearson por pares (-1 a 1). Verde = positiva, rojo = negativa, más intenso = más fuerte.</div>`;
+}
+
+function renderCrosstabTableHtml(vars, rows) {
+  const catVars = vars.filter(v => ['categorical', 'bool'].includes(state.columns[v].type));
+  const numVars = vars.filter(v => state.columns[v].type === 'numeric');
+  const groups = {};
+  rows.forEach(r => {
+    const keyParts = catVars.map(v => r[v]);
+    if (keyParts.some(k => k === null || k === undefined || k === '')) return;
+    const key = keyParts.map(String).join(' · ');
+    groups[key] = groups[key] || { count: 0, sums: {} };
+    groups[key].count++;
+    numVars.forEach(nv => { const n = Number(r[nv]); if (!isNaN(n)) groups[key].sums[nv] = (groups[key].sums[nv] || 0) + n; });
+  });
+  const entries = Object.entries(groups).sort((a, b) => b[1].count - a[1].count).slice(0, 20);
+  let html = `<table style="width:100%; border-collapse:collapse; font-size:12.5px;"><tr>
+    ${catVars.map(v => `<th style="text-align:left; padding:8px; color:var(--text-dim); border-bottom:1px solid var(--border);">${escapeHtml(v)}</th>`).join('')}
+    <th style="text-align:right; padding:8px; color:var(--text-dim); border-bottom:1px solid var(--border);">Registros</th>
+    ${numVars.map(nv => `<th style="text-align:right; padding:8px; color:var(--text-dim); border-bottom:1px solid var(--border);">Media ${escapeHtml(nv)}</th>`).join('')}
+    </tr>`;
+  entries.forEach(([key, g]) => {
+    const parts = key.split(' · ');
+    html += `<tr>${parts.map(p => `<td style="padding:7px; border-bottom:1px solid var(--border);">${escapeHtml(p)}</td>`).join('')}
+      <td style="padding:7px; text-align:right; border-bottom:1px solid var(--border); font-family:var(--mono);">${g.count}</td>
+      ${numVars.map(nv => `<td style="padding:7px; text-align:right; border-bottom:1px solid var(--border); font-family:var(--mono);">${g.sums[nv] !== undefined ? fmt(g.sums[nv] / g.count) : '—'}</td>`).join('')}
+      </tr>`;
+  });
+  html += '</table>';
+  return `<div style="overflow-x:auto;">${html}</div><div class="hint" style="margin-top:10px;">Top 20 combinaciones por cantidad de registros.</div>`;
 }
 
 function histogramBins(vals, nBins) {
@@ -831,7 +995,7 @@ function applyWhatif() {
 
   renderComparePanel(beforeStats, afterStats, original, rows);
   const suggestion = suggestChart(state.selectedVars);
-  drawChart('mainChart', state.selectedVars, suggestion.kind, rows);
+  renderChartArea(state.selectedVars, suggestion.kind, rows);
 }
 
 function applyTechnique(rows, varName, tech) {
