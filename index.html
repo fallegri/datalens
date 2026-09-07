@@ -206,6 +206,114 @@ const AI_DEFAULTS = {
   ollama: { endpoint: 'http://localhost:11434', model: 'llama3.1' }
 };
 
+/* ===================== PARSER CSV PROPIO ===================== */
+// No delegamos el parseo de CSV a XLSX.read porque su heurística de fechas
+// asume formato estadounidense (M/D/Y) y falla silenciosamente con D/M/Y
+// (formato boliviano/latinoamericano): días 1-12 se interpretan invertidos,
+// y días 13-31 quedan como texto sin convertir. Parseamos el CSV nosotros
+// mismos como texto crudo, y las fechas se normalizan aparte (ver más abajo).
+function parseCSVText(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // BOM
+  const lines = text.split(/\r\n|\n|\r/).filter(l => l.length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const delim = detectDelimiter(lines[0]);
+  const headers = splitCsvLine(lines[0], delim);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const fields = splitCsvLine(lines[i], delim);
+    if (fields.every(f => f === '')) continue;
+    const row = {};
+    headers.forEach((h, idx) => { const raw = fields[idx]; row[h] = (raw === undefined || raw === '') ? null : raw; });
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function detectDelimiter(headerLine) {
+  const candidates = [',', ';', '\t'];
+  let best = ',', bestCount = -1;
+  candidates.forEach(c => { const count = headerLine.split(c).length - 1; if (count > bestCount) { bestCount = count; best = c; } });
+  return best;
+}
+
+function splitCsvLine(line, delim) {
+  const out = []; let cur = ''; let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false; }
+      else cur += ch;
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === delim) { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+
+/* ===================== NORMALIZACIÓN DE COLUMNAS DE FECHA ===================== */
+const DATE_TOKEN_RE = /^\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4}$/;
+
+function splitDateParts(s) {
+  const parts = s.split(/[\/\-.]/);
+  if (parts.length !== 3) return null;
+  const nums = parts.map(p => parseInt(p, 10));
+  return nums.some(isNaN) ? null : nums;
+}
+
+// Determina el orden día/mes/año escaneando TODA la columna: si algún valor
+// tiene un componente >12 en la primera posición, ese es el día (D/M/Y). Si
+// aparece >12 en la segunda posición, la primera era el mes (M/D/Y). Si nunca
+// se puede desambiguar, se asume día-primero (convención boliviana/LatAm).
+function detectDateFormat(strs) {
+  let yearFirst = false, dayFirst = true;
+  for (const s of strs) {
+    const parts = splitDateParts(s);
+    if (!parts) continue;
+    const [a, b] = parts;
+    if (a > 31) { yearFirst = true; break; }
+    if (a > 12) { dayFirst = true; break; }
+    if (b > 12) { dayFirst = false; break; }
+  }
+  return { yearFirst, dayFirst };
+}
+
+function parseWithFormat(s, format) {
+  const parts = splitDateParts(s);
+  if (!parts) return null;
+  let [a, b, c] = parts, day, month, year;
+  if (format.yearFirst) { year = a; month = b; day = c; }
+  else if (format.dayFirst) { day = a; month = b; year = c; }
+  else { month = a; day = b; year = c; }
+  if (year < 100) year += 2000;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return (isNaN(d) || d.getUTCMonth() !== month - 1) ? null : d;
+}
+
+// Muta rows[i][h] a objetos Date cuando la columna resulta ser de fechas en
+// texto. Si ya son fechas nativas confiables (celdas de Excel con formato de
+// fecha real), no toca nada.
+function normalizeDateColumnIfNeeded(rows, h) {
+  const raw = rows.map(r => r[h]).filter(v => v !== null && v !== undefined && v !== '');
+  if (!raw.length) return;
+  const alreadyDateFrac = raw.filter(v => v instanceof Date).length / raw.length;
+  if (alreadyDateFrac > 0.9) return;
+  const strs = raw.filter(v => typeof v === 'string').map(v => v.trim());
+  if (!strs.length) return;
+  const dateLikeCount = strs.filter(s => DATE_TOKEN_RE.test(s)).length;
+  if (dateLikeCount / strs.length < 0.7) return;
+  const format = detectDateFormat(strs);
+  rows.forEach(r => {
+    const v = r[h];
+    if (typeof v !== 'string') return;
+    const parsed = parseWithFormat(v.trim(), format);
+    if (parsed) r[h] = parsed;
+  });
+}
+
 /* ===================== CARGA DE ARCHIVO ===================== */
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
@@ -221,6 +329,24 @@ fileInput.addEventListener('change', e => { if (e.target.files.length) handleFil
 
 function handleFile(file) {
   document.getElementById('fileInfo').textContent = `Cargando "${file.name}"...`;
+  if (/\.csv$/i.test(file.name)) {
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const { headers, rows } = parseCSVText(evt.target.result);
+        if (!rows.length) { document.getElementById('fileInfo').textContent = 'No se encontraron filas de datos.'; return; }
+        const name = file.name.replace(/\.csv$/i, '');
+        state.tables = { [name]: { headers, rows } };
+        document.getElementById('fileInfo').textContent = `"${file.name}" · 1 tabla`;
+        populateTableSelect([name]);
+        selectTable(name);
+      } catch (err) {
+        document.getElementById('fileInfo').textContent = 'Error al leer el CSV: ' + err.message;
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+    return;
+  }
   const reader = new FileReader();
   reader.onload = (evt) => {
     try {
@@ -268,6 +394,7 @@ function selectTable(name) {
 /* ===================== PERFILADO / INFERENCIA DE TIPOS ===================== */
 function profileTable(table) {
   const { headers, rows } = table;
+  headers.forEach(h => normalizeDateColumnIfNeeded(rows, h));
   const cols = {};
   headers.forEach(h => {
     const values = rows.map(r => r[h]);
