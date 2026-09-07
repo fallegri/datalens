@@ -315,7 +315,7 @@ function inferType(nonNullValues) {
 }
 
 function numericStats(nums) {
-  if (!nums.length) return { mean: null, median: null, std: null, min: null, max: null, skew: null };
+  if (!nums.length) return { mean: null, median: null, std: null, min: null, max: null, skew: null, outlierCount: 0, outlierPct: 0 };
   const n = nums.length;
   const sorted = [...nums].sort((a, b) => a - b);
   const mean = nums.reduce((a, b) => a + b, 0) / n;
@@ -325,7 +325,14 @@ function numericStats(nums) {
   const skew = std ? (nums.reduce((a, b) => a + ((b - mean) / std) ** 3, 0) / n) : 0;
   const q1 = sorted[Math.floor(n * 0.25)];
   const q3 = sorted[Math.floor(n * 0.75)];
-  return { mean, median, std, min: sorted[0], max: sorted[n - 1], skew, q1, q3, sorted };
+  const iqr = q3 - q1;
+  const lowerBound = q1 - 1.5 * iqr;
+  const upperBound = q3 + 1.5 * iqr;
+  const outliers = nums.filter(v => v < lowerBound || v > upperBound);
+  return {
+    mean, median, std, min: sorted[0], max: sorted[n - 1], skew, q1, q3, sorted,
+    lowerBound, upperBound, outlierCount: outliers.length, outlierPct: outliers.length / n * 100
+  };
 }
 
 function categoricalStats(vals) {
@@ -759,13 +766,41 @@ function renderComparePanel(before, after, originalRows, cleanedRows) {
   const panel = document.getElementById('comparePanel');
   panel.style.display = 'block';
   const rowsHtml = state.selectedVars.map(v => statDeltaCards(v, before[v], after[v])).join('<hr style="border-color:var(--border); margin:16px 0;">');
+
+  const flags = state.selectedVars
+    .map(v => outlierRiskFlag(v, before[v], state.activeTechnique && state.activeTechnique[v]))
+    .filter(Boolean);
+  const flagsHtml = flags.length
+    ? `<div class="ai-explain" style="border-color:rgba(232,96,122,.45);"><span class="tag" style="color:var(--danger);">Alerta determinística (no depende de la IA)</span>${flags.map(f => `<div style="margin-top:6px;">${escapeHtml(f)}</div>`).join('')}</div>`
+    : '';
+
   panel.innerHTML = `
     <h2>Antes vs. después</h2>
     <div class="desc">Filas: ${originalRows.length.toLocaleString('es-BO')} originales → ${cleanedRows.length.toLocaleString('es-BO')} tras aplicar la técnica.</div>
     ${rowsHtml}
-    <div class="ai-explain" id="aiExplainBox"><span class="tag">Impacto estadístico</span><span id="aiExplainText">Generando explicación...</span></div>
+    ${flagsHtml}
+    <div class="ai-explain" id="aiExplainBox"><span class="tag">Impacto estadístico (razonamiento del modelo)</span><span id="aiExplainText">Generando explicación...</span></div>
   `;
   generateImpactExplanation(before, after, originalRows.length, cleanedRows.length);
+}
+
+/* Chequeo determinístico de riesgo por outliers — se calcula siempre localmente,
+   no depende de que el modelo de IA "note" el outlier. Esto es lo que faltaba:
+   antes solo se le pasaban mean/median/std/skew al modelo, sin marcar
+   explícitamente que existían outliers ni qué tan sensible es la técnica elegida. */
+function outlierRiskFlag(varName, beforeCol, technique) {
+  if (!technique || beforeCol.type !== 'numeric' || !beforeCol.outlierCount) return null;
+  const range = `[${fmt(beforeCol.lowerBound)}, ${fmt(beforeCol.upperBound)}]`;
+  if (technique === 'fill_mean') {
+    return `"${varName}" tiene ${beforeCol.outlierCount} valor(es) atípico(s) fuera del rango IQR ${range}, que ya inflan la media (${fmt(beforeCol.mean)} vs. mediana ${fmt(beforeCol.median)}). Rellenar los nulos con esa media propaga ese sesgo a cada fila completada. Recomendado: usar "Rellenar con mediana" o "Capar outliers (IQR)" antes de imputar.`;
+  }
+  if (technique === 'fill_zero') {
+    return `"${varName}" tiene ${beforeCol.outlierCount} valor(es) atípico(s) por arriba y, además, rellenar con 0 introduce un segundo grupo de valores extremos por abajo. La media y la desviación estándar del resultado ya no representan bien la variable real.`;
+  }
+  if (technique === 'drop_rows' || technique === 'fill_median' || technique === 'interpolate' || technique === 'ffill' || technique === 'bfill') {
+    return `"${varName}" tiene ${beforeCol.outlierCount} valor(es) atípico(s) fuera de ${range} que esta técnica no corrige — seguirán presentes en los datos limpios. Si el objetivo es neutralizarlos, además hay que aplicar "Capar outliers (IQR)".`;
+  }
+  return null;
 }
 
 function statDeltaCards(varName, before, after) {
@@ -935,16 +970,23 @@ function buildAiPrompt(before, after, nBefore, nAfter) {
   const summary = state.selectedVars.map(v => ({
     variable: v,
     tipo: before[v].type,
+    tecnica_aplicada: (state.activeTechnique && state.activeTechnique[v]) || 'ninguna',
     antes: pickStats(before[v]),
     despues: pickStats(after[v])
   }));
-  return `Sos un asistente de análisis de datos. Se aplicó una técnica de limpieza a un dataset (de ${nBefore} a ${nAfter} filas).
-Estadísticas antes y después por variable (JSON): ${JSON.stringify(summary)}
-Explicá en español, en un párrafo breve y concreto (máx. 120 palabras), el impacto estadístico del cambio: qué se movió, si introduce sesgo, y si la técnica parece razonable para este caso. No uses formato markdown, solo texto plano.`;
+  return `Sos un asistente de análisis de datos estricto y escéptico, no optimista por defecto. Se aplicó una técnica de limpieza a un dataset (de ${nBefore} a ${nAfter} filas).
+Estadísticas antes y después por variable, incluyendo si existen outliers detectados por rango intercuartílico (IQR) en "outlierCount"/"outlierPct"/"lowerBound"/"upperBound" (JSON): ${JSON.stringify(summary)}
+
+Reglas obligatorias de análisis:
+- Si "antes.outlierCount" > 0 y la técnica aplicada es sensible a outliers (rellenar con media, rellenar con cero, o cualquier técnica que no los trate), señalalo explícitamente y explicá por qué eso sesga el resultado — no digas que "el sesgo es mínimo" solo porque el delta porcentual de la media es chico; un delta chico puede ocultar que la media de referencia ya estaba inflada por el outlier.
+- Si la técnica fue "Capar outliers (IQR)" o "Rellenar con mediana", indicá que es más robusta frente a outliers.
+- No asumas que ausencia de outliers reportados significa que la variable es limpia; solo describí lo que los datos muestran.
+
+Explicá en español, en un párrafo breve y concreto (máx. 130 palabras), el impacto estadístico real del cambio. No uses formato markdown, solo texto plano.`;
 }
 
 function pickStats(c) {
-  if (c.type === 'numeric') return { mean: c.mean, median: c.median, std: c.std, skew: c.skew, nullPct: c.nullPct };
+  if (c.type === 'numeric') return { mean: c.mean, median: c.median, std: c.std, skew: c.skew, nullPct: c.nullPct, min: c.min, max: c.max, outlierCount: c.outlierCount, outlierPct: c.outlierPct, lowerBound: c.lowerBound, upperBound: c.upperBound };
   return { uniqueCount: c.uniqueCount, mode: c.mode, entropy: c.entropy, nullPct: c.nullPct };
 }
 
@@ -957,7 +999,8 @@ function buildRuleBasedExplanation(before, after, nBefore, nAfter) {
     if (b.type === 'numeric') {
       const meanShift = (b.mean && a.mean !== null) ? ((a.mean - b.mean) / (Math.abs(b.mean) || 1) * 100) : 0;
       const stdShift = (b.std && a.std !== null) ? ((a.std - b.std) / (Math.abs(b.std) || 1) * 100) : 0;
-      lines.push(`"${v}": la media varió ${meanShift>=0?'+':''}${meanShift.toFixed(1)}% y la desviación estándar ${stdShift>=0?'+':''}${stdShift.toFixed(1)}%. ${Math.abs(stdShift) > 15 ? 'Ese cambio en la dispersión sugiere que la técnica podría estar comprimiendo o distorsionando la variabilidad real.' : 'La forma de la distribución se mantiene relativamente estable.'}`);
+      const outlierNote = b.outlierCount > 0 ? ` La variable original tenía ${b.outlierCount} valor(es) atípico(s) (fuera de [${fmt(b.lowerBound)}, ${fmt(b.upperBound)}]), por lo que un delta porcentual chico en la media no garantiza ausencia de sesgo: esa media de referencia ya podía estar inflada.` : '';
+      lines.push(`"${v}": la media varió ${meanShift>=0?'+':''}${meanShift.toFixed(1)}% y la desviación estándar ${stdShift>=0?'+':''}${stdShift.toFixed(1)}%.${outlierNote} ${Math.abs(stdShift) > 15 ? 'Ese cambio en la dispersión sugiere que la técnica podría estar comprimiendo o distorsionando la variabilidad real.' : ''}`);
     } else {
       const uniqShift = a.uniqueCount - b.uniqueCount;
       lines.push(`"${v}": las categorías únicas pasaron de ${b.uniqueCount} a ${a.uniqueCount}${uniqShift!==0?` (${uniqShift>0?'+':''}${uniqShift})`:''}. ${b.mode !== a.mode ? 'La categoría más frecuente cambió, lo que puede indicar sesgo introducido por la técnica.' : 'La categoría dominante se mantuvo igual.'}`);
