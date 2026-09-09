@@ -50,7 +50,7 @@ select, input[type=text], input[type=password], input[type=number]{
 main{display:grid; grid-template-columns:280px 1fr; min-height:calc(100vh - 73px);}
 nav.side{
   border-right:1px solid var(--border); padding:18px; background:var(--bg-panel);
-  display:flex; flex-direction:column; gap:18px;
+  display:flex; flex-direction:column; gap:18px; width:300px; flex-shrink:0;
 }
 .block{background:var(--bg-panel-2); border:1px solid var(--border); border-radius:10px; padding:14px;}
 .block h3{margin:0 0 10px; font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-dim); font-weight:600;}
@@ -59,16 +59,19 @@ nav.side{
   color:var(--text-dim); font-size:12.5px; cursor:pointer; transition:border-color .15s;
 }
 .dropzone:hover, .dropzone.drag{border-color:var(--accent); color:var(--text);}
-.varlist{display:flex; flex-direction:column; gap:4px; max-height:260px; overflow-y:auto;}
+.varlist{display:flex; flex-direction:column; gap:6px; max-height:340px; overflow-y:auto;}
 .varitem{
-  display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; cursor:pointer;
-  font-size:12.5px;
+  display:flex; flex-direction:column; gap:5px; padding:10px 11px; border-radius:8px; cursor:pointer;
+  border:1px solid transparent;
 }
 .varitem:hover{background:var(--bg);}
-.varitem.selected{background:rgba(79,209,197,.12); border:1px solid rgba(79,209,197,.35);}
-.varitem .type-dot{width:7px; height:7px; border-radius:50%; flex-shrink:0;}
-.varitem .name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.varitem .nullpct{color:var(--text-dim); font-family:var(--mono); font-size:10.5px;}
+.varitem.selected{background:rgba(79,209,197,.12); border-color:rgba(79,209,197,.4);}
+.varitem .row-top{display:flex; align-items:center; gap:8px;}
+.varitem .type-dot{width:8px; height:8px; border-radius:50%; flex-shrink:0;}
+.varitem .name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:600; color:var(--text);}
+.varitem .row-meta{display:flex; align-items:center; gap:10px; padding-left:16px;}
+.varitem .type-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--text-dim);}
+.varitem .nullpct{color:var(--text-dim); font-family:var(--mono); font-size:11px; margin-left:auto;}
 .type-num{background:#4fd1c5;} .type-cat{background:#f2b84b;} .type-date{background:#9b8cf2;} .type-bool{background:#6fcf97;} .type-text{background:#8b93a7;}
 content{padding:22px 28px; display:flex; flex-direction:column; gap:20px; overflow-x:hidden;}
 .panel{background:var(--bg-panel); border:1px solid var(--border); border-radius:12px; padding:18px 20px;}
@@ -92,6 +95,10 @@ canvas{max-width:100%;}
 }
 .tech-chip:hover{border-color:var(--accent-2);}
 .tech-chip.active{background:rgba(242,184,75,.14); border-color:var(--accent-2); color:var(--text);}
+.tech-chip.recommended{border-color:var(--ok); color:var(--text);}
+.tech-chip.recommended.active{background:rgba(111,207,151,.16); border-color:var(--ok);}
+.tech-chip.warn{border-color:#e08a3c;}
+.tech-chip.disabled{opacity:.4; cursor:not-allowed; color:var(--text-dim);}
 .nullmatrix{display:grid; grid-auto-flow:column; grid-template-rows:repeat(20,1fr); gap:1px; height:120px; overflow-x:auto;}
 .nullcell{width:4px;}
 .nullcell.present{background:var(--accent);opacity:.55;}
@@ -125,6 +132,7 @@ canvas{max-width:100%;}
   <div style="display:flex; gap:10px; align-items:center;">
     <span id="aiStatusBadge" class="badge"><span class="status-dot off"></span>IA: sin configurar</span>
     <button id="btnAiConfig" class="small-btn">Configurar IA</button>
+    <button id="btnDownloadLog" class="small-btn" disabled>Descargar registro (.md)</button>
   </div>
 </header>
 
@@ -192,10 +200,27 @@ const state = {
   tables: {},          // { sheetName: { headers:[...], rows:[{...}] } }
   currentTable: null,
   columns: {},         // profiling por columna: { name: {type, nullPct, ...stats} }
-  selectedVars: [],    // hasta 2 variables seleccionadas
-  cleaned: null,       // copia de filas luego de aplicar técnica what-if
+  selectedVars: [],    // hasta 3 variables seleccionadas
+  cleaned: null,       // dataset de trabajo acumulado (se conserva entre cambios de variable)
   activeTechnique: null,
+  changeLog: [],       // historial de cambios aplicados en la sesión, para exportar a .md
   charts: {}           // referencias Chart.js activas para destroy()
+};
+
+const RARE_CATEGORY_THRESHOLD = 0.03;
+
+const TECHNIQUE_LABELS = {
+  drop_rows: 'Eliminar filas con nulo',
+  fill_mean: 'Rellenar con media',
+  fill_median: 'Rellenar con mediana',
+  fill_zero: 'Rellenar con 0',
+  interpolate: 'Interpolación lineal',
+  winsorize: 'Capar outliers (IQR)',
+  fill_mode: 'Rellenar con moda',
+  fill_unknown: 'Rellenar con "Desconocido"',
+  group_rare: 'Agrupar categorías raras en "Otros"',
+  ffill: 'Forward-fill',
+  bfill: 'Backward-fill'
 };
 
 const AI_DEFAULTS = {
@@ -385,8 +410,11 @@ function selectTable(name) {
   state.currentTable = name;
   state.selectedVars = [];
   state.cleaned = null;
+  state.activeTechnique = null;
+  state.changeLog = [];
   profileTable(state.tables[name]);
   renderVarList();
+  refreshChangeLogButton();
   document.getElementById('varBlock').style.display = 'flex';
   renderEmptyContent();
 }
@@ -478,10 +506,15 @@ function renderVarList() {
   const list = document.getElementById('varList');
   const cols = state.columns;
   list.innerHTML = Object.values(cols).map(c => `
-    <div class="varitem" data-name="${escapeHtml(c.name)}">
-      <span class="type-dot type-${typeClass(c.type)}"></span>
-      <span class="name" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span>
-      <span class="nullpct">${c.nullPct.toFixed(0)}% null</span>
+    <div class="varitem" data-name="${escapeHtml(c.name)}" title="${escapeHtml(c.name)}">
+      <div class="row-top">
+        <span class="type-dot type-${typeClass(c.type)}"></span>
+        <span class="name">${escapeHtml(c.name)}</span>
+      </div>
+      <div class="row-meta">
+        <span class="type-label">${c.type}</span>
+        <span class="nullpct">${c.nullPct.toFixed(0)}% null</span>
+      </div>
     </div>`).join('');
   list.querySelectorAll('.varitem').forEach(el => {
     el.addEventListener('click', () => toggleVar(el.dataset.name));
@@ -499,7 +532,9 @@ function toggleVar(name) {
     if (state.selectedVars.length >= 3) state.selectedVars.shift();
     state.selectedVars.push(name);
   }
-  state.cleaned = null;
+  // Nota: no se resetea state.cleaned aquí — el dataset de trabajo acumulado
+  // se mantiene al cambiar de variable seleccionada. Solo se limpian las
+  // técnicas "staged" (elegidas pero no aplicadas) de la selección anterior.
   state.activeTechnique = null;
   syncVarSelectionUI();
   renderMainAnalysis();
@@ -918,48 +953,80 @@ function crossTab(rows, varA, varB) {
 }
 
 /* ===================== PANEL WHAT-IF DE LIMPIEZA ===================== */
+function countRareCategories(c) {
+  const total = Object.values(c.counts || {}).reduce((a, b) => a + b, 0);
+  if (!total) return 0;
+  return Object.values(c.counts).filter(cnt => cnt / total < RARE_CATEGORY_THRESHOLD).length;
+}
+
+// Devuelve solo las técnicas que tienen sentido para ESTA columna en su estado
+// actual (nulos/outliers/categorías raras reales, no una lista fija por tipo).
+// La marca "recommended"/"warn" es determinística (reglas), no depende de IA.
 function techniquesFor(varName) {
-  const t = state.columns[varName].type;
-  const common = [{ id: 'drop_rows', label: 'Eliminar filas con nulo' }];
-  if (t === 'numeric') return [...common,
-    { id: 'fill_mean', label: 'Rellenar con media' },
-    { id: 'fill_median', label: 'Rellenar con mediana' },
-    { id: 'fill_zero', label: 'Rellenar con 0' },
-    { id: 'interpolate', label: 'Interpolación lineal' },
-    { id: 'winsorize', label: 'Capar outliers (IQR)' }
-  ];
-  if (t === 'categorical' || t === 'bool' || t === 'text') return [...common,
-    { id: 'fill_mode', label: 'Rellenar con moda' },
-    { id: 'fill_unknown', label: 'Rellenar con "Desconocido"' },
-    { id: 'group_rare', label: 'Agrupar categorías raras en "Otros"' }
-  ];
-  if (t === 'date') return [...common,
-    { id: 'ffill', label: 'Forward-fill' },
-    { id: 'bfill', label: 'Backward-fill' }
-  ];
-  return common;
+  const c = state.columns[varName];
+  const t = c.type;
+  const hasNulls = c.nullCount > 0;
+  const list = [];
+
+  if (hasNulls) list.push({ id: 'drop_rows', label: TECHNIQUE_LABELS.drop_rows });
+
+  if (t === 'numeric') {
+    const hasOutliers = c.outlierCount > 0;
+    if (hasNulls) {
+      list.push({ id: 'fill_mean', label: TECHNIQUE_LABELS.fill_mean, warn: hasOutliers ? `Hay ${c.outlierCount} outlier(s): la media ya está inflada por ellos, esto propaga ese sesgo a los nulos rellenados.` : null });
+      list.push({ id: 'fill_median', label: TECHNIQUE_LABELS.fill_median, recommended: hasOutliers });
+      list.push({ id: 'fill_zero', label: TECHNIQUE_LABELS.fill_zero });
+      list.push({ id: 'interpolate', label: TECHNIQUE_LABELS.interpolate });
+    }
+    if (hasOutliers) list.push({ id: 'winsorize', label: `${TECHNIQUE_LABELS.winsorize} — ${c.outlierCount} detectado(s)`, recommended: true });
+  } else if (t === 'categorical' || t === 'bool' || t === 'text') {
+    const rareCount = countRareCategories(c);
+    if (hasNulls) {
+      list.push({ id: 'fill_mode', label: TECHNIQUE_LABELS.fill_mode });
+      list.push({ id: 'fill_unknown', label: TECHNIQUE_LABELS.fill_unknown });
+    }
+    if (rareCount > 0) list.push({ id: 'group_rare', label: `${TECHNIQUE_LABELS.group_rare} (${rareCount} detectada(s))`, recommended: c.uniqueCount > 8 });
+  } else if (t === 'date') {
+    if (hasNulls) {
+      list.push({ id: 'ffill', label: TECHNIQUE_LABELS.ffill });
+      list.push({ id: 'bfill', label: TECHNIQUE_LABELS.bfill });
+    }
+  }
+
+  if (!list.length) list.push({ id: 'none', label: 'Sin nulos ni atípicos detectados — no hay limpieza que sugerir', disabled: true });
+  return list;
 }
 
 function renderWhatifPanel(vars) {
   const panel = document.getElementById('whatifPanel');
-  const techBlocks = vars.map(v => `
-    <div style="flex:1; min-width:240px;">
+  const techBlocks = vars.map(v => {
+    const techs = techniquesFor(v);
+    const chips = techs.map(t => {
+      if (t.disabled) return `<div class="tech-chip disabled">${escapeHtml(t.label)}</div>`;
+      const cls = ['tech-chip'];
+      if (t.recommended) cls.push('recommended');
+      if (t.warn) cls.push('warn');
+      const suffix = t.recommended ? ' ★' : (t.warn ? ' ⚠' : '');
+      const titleAttr = t.warn ? ` title="${escapeHtml(t.warn)}"` : (t.recommended ? ' title="Recomendada según las características detectadas en esta columna"' : '');
+      return `<div class="${cls.join(' ')}" data-var="${escapeHtml(v)}" data-tech="${t.id}"${titleAttr}>${escapeHtml(t.label)}${suffix}</div>`;
+    }).join('');
+    return `
+    <div style="flex:1; min-width:260px;">
       <div class="hint" style="margin-bottom:6px;"><strong style="color:var(--text);">${escapeHtml(v)}</strong> — técnica de limpieza</div>
-      <div class="tech-list" data-var="${escapeHtml(v)}">
-        ${techniquesFor(v).map(t => `<div class="tech-chip" data-var="${escapeHtml(v)}" data-tech="${t.id}">${t.label}</div>`).join('')}
-      </div>
-    </div>`).join('');
+      <div class="tech-list" data-var="${escapeHtml(v)}">${chips}</div>
+    </div>`;
+  }).join('');
 
   panel.innerHTML = `
     <h2>Simulación what-if de limpieza</h2>
-    <div class="desc">Elegí una técnica por variable y compará el impacto en la distribución y en las estadísticas antes de aplicarla de verdad.</div>
+    <div class="desc">Solo se muestran técnicas que aplican según los nulos/atípicos/categorías raras detectados en cada variable ahora mismo. ★ = recomendada · ⚠ = aplicable pero con riesgo (pasá el mouse para el detalle).</div>
     <div style="display:flex; gap:24px; flex-wrap:wrap;">${techBlocks}</div>
     <div style="margin-top:16px; display:flex; gap:10px;">
       <button class="primary" id="btnApplyWhatif" disabled>Aplicar y comparar</button>
-      <button id="btnResetWhatif">Restablecer</button>
+      <button id="btnResetWhatif">Restablecer todo</button>
     </div>
   `;
-  panel.querySelectorAll('.tech-chip').forEach(chip => {
+  panel.querySelectorAll('.tech-chip:not(.disabled)').forEach(chip => {
     chip.addEventListener('click', () => {
       const v = chip.dataset.var;
       panel.querySelectorAll(`.tech-chip[data-var="${CSS.escape(v)}"]`).forEach(c => c.classList.remove('active'));
@@ -970,32 +1037,76 @@ function renderWhatifPanel(vars) {
     });
   });
   document.getElementById('btnApplyWhatif').addEventListener('click', applyWhatif);
-  document.getElementById('btnResetWhatif').addEventListener('click', () => {
-    state.cleaned = null; state.activeTechnique = null;
-    document.getElementById('comparePanel').style.display = 'none';
-    renderMainAnalysis();
-  });
+  document.getElementById('btnResetWhatif').addEventListener('click', resetAllWhatif);
+}
+
+function resetAllWhatif() {
+  if (state.changeLog.length && !confirm('Esto descarta el dataset limpio acumulado y el registro de cambios de esta tabla. ¿Continuar?')) return;
+  state.cleaned = null; state.activeTechnique = null; state.changeLog = [];
+  profileTable(state.tables[state.currentTable]);
+  renderVarList();
+  refreshChangeLogButton();
+  document.getElementById('comparePanel').style.display = 'none';
+  renderMainAnalysis();
 }
 
 function applyWhatif() {
-  const original = state.tables[state.currentTable].rows;
+  const original = getRows(); // dataset de trabajo actual (acumulado de cambios previos, si los hay)
   let rows = original.map(r => ({ ...r }));
   const beforeStats = {};
   state.selectedVars.forEach(v => beforeStats[v] = { ...profileColumn(v, rows.map(r => r[v])) });
 
+  const appliedChanges = [];
   state.selectedVars.forEach(v => {
     const tech = state.activeTechnique && state.activeTechnique[v];
     if (!tech) return;
     rows = applyTechnique(rows, v, tech);
+    appliedChanges.push({ variable: v, techniqueId: tech });
   });
+  if (!appliedChanges.length) return;
 
   state.cleaned = rows;
   const afterStats = {};
   state.selectedVars.forEach(v => afterStats[v] = { ...profileColumn(v, rows.map(r => r[v])) });
 
+  reprofileFromCurrentRows();
+  renderVarList();
+
   renderComparePanel(beforeStats, afterStats, original, rows);
   const suggestion = suggestChart(state.selectedVars);
   renderChartArea(state.selectedVars, suggestion.kind, rows);
+
+  const batch = {
+    timestamp: new Date(),
+    table: state.currentTable,
+    rowsBefore: original.length,
+    rowsAfter: rows.length,
+    changes: appliedChanges.map(ac => ({
+      variable: ac.variable,
+      techniqueId: ac.techniqueId,
+      techniqueLabel: TECHNIQUE_LABELS[ac.techniqueId] || ac.techniqueId,
+      type: beforeStats[ac.variable].type,
+      before: pickStats(beforeStats[ac.variable]),
+      after: pickStats(afterStats[ac.variable]),
+      outlierFlag: outlierRiskFlag(ac.variable, beforeStats[ac.variable], ac.techniqueId)
+    })),
+    explanation: null
+  };
+  state.changeLog.push(batch);
+  refreshChangeLogButton();
+
+  generateImpactExplanation(beforeStats, afterStats, original.length, rows.length, batch);
+}
+
+// Recalcula el perfil (tipo, nulos, outliers, etc.) de TODAS las columnas a
+// partir del dataset de trabajo actual, para que el panel lateral y las
+// técnicas sugeridas reflejen los cambios ya aplicados en otras variables.
+function reprofileFromCurrentRows() {
+  const headers = state.tables[state.currentTable].headers;
+  const rows = getRows();
+  const cols = {};
+  headers.forEach(h => { cols[h] = profileColumn(h, rows.map(r => r[h])); });
+  state.columns = cols;
 }
 
 function applyTechnique(rows, varName, tech) {
@@ -1039,7 +1150,7 @@ function applyTechnique(rows, varName, tech) {
   if (tech === 'group_rare') {
     const stats = categoricalStats(rows.map(r => r[varName]).filter(v => !isMissing(v)));
     const total = Object.values(stats.counts).reduce((a,b)=>a+b,0);
-    const rareSet = new Set(Object.entries(stats.counts).filter(([,c]) => c/total < 0.03).map(([k])=>k));
+    const rareSet = new Set(Object.entries(stats.counts).filter(([,c]) => c/total < RARE_CATEGORY_THRESHOLD).map(([k])=>k));
     return rows.map(r => rareSet.has(String(r[varName])) ? { ...r, [varName]: 'Otros' } : r);
   }
   if (tech === 'ffill' || tech === 'bfill') {
@@ -1238,22 +1349,27 @@ async function callAiProvider(cfg, prompt) {
 }
 
 /* ===================== EXPLICACIÓN DE IMPACTO (IA o REGLAS) ===================== */
-async function generateImpactExplanation(before, after, nBefore, nAfter) {
+async function generateImpactExplanation(before, after, nBefore, nAfter, batch) {
   const box = document.getElementById('aiExplainText');
   const cfg = loadAiConfig();
   const ruleBasedText = buildRuleBasedExplanation(before, after, nBefore, nAfter);
 
   if (!cfg || cfg.provider === 'none') {
     box.textContent = ruleBasedText;
+    if (batch) batch.explanation = ruleBasedText;
     return;
   }
   box.textContent = 'Consultando IA (' + providerLabel(cfg.provider) + ')...';
   const prompt = buildAiPrompt(before, after, nBefore, nAfter);
   try {
     const reply = await callAiProvider(cfg, prompt);
-    box.textContent = reply ? reply.trim() : ruleBasedText;
+    const finalText = reply ? reply.trim() : ruleBasedText;
+    box.textContent = finalText;
+    if (batch) batch.explanation = finalText;
   } catch (err) {
-    box.textContent = ruleBasedText + `\n\n(No se pudo consultar la IA configurada: ${err.message}. Se muestra el análisis basado en reglas.)`;
+    const finalText = ruleBasedText + `\n\n(No se pudo consultar la IA configurada: ${err.message}. Se muestra el análisis basado en reglas.)`;
+    box.textContent = finalText;
+    if (batch) batch.explanation = finalText;
   }
 }
 
@@ -1277,8 +1393,8 @@ Explicá en español, en un párrafo breve y concreto (máx. 130 palabras), el i
 }
 
 function pickStats(c) {
-  if (c.type === 'numeric') return { mean: c.mean, median: c.median, std: c.std, skew: c.skew, nullPct: c.nullPct, min: c.min, max: c.max, outlierCount: c.outlierCount, outlierPct: c.outlierPct, lowerBound: c.lowerBound, upperBound: c.upperBound };
-  return { uniqueCount: c.uniqueCount, mode: c.mode, entropy: c.entropy, nullPct: c.nullPct };
+  if (c.type === 'numeric') return { type: c.type, mean: c.mean, median: c.median, std: c.std, skew: c.skew, nullPct: c.nullPct, min: c.min, max: c.max, outlierCount: c.outlierCount, outlierPct: c.outlierPct, lowerBound: c.lowerBound, upperBound: c.upperBound };
+  return { type: c.type, uniqueCount: c.uniqueCount, mode: c.mode, entropy: c.entropy, nullPct: c.nullPct };
 }
 
 function buildRuleBasedExplanation(before, after, nBefore, nAfter) {
@@ -1300,8 +1416,62 @@ function buildRuleBasedExplanation(before, after, nBefore, nAfter) {
   return lines.join(' ');
 }
 
+/* ===================== REGISTRO DE CAMBIOS Y EXPORTACIÓN A .MD ===================== */
+function refreshChangeLogButton() {
+  const btn = document.getElementById('btnDownloadLog');
+  if (btn) btn.disabled = !state.changeLog.length;
+}
+
+function formatStatsForMd(s) {
+  if (s.type === 'numeric') return `media=${fmt(s.mean)}, mediana=${fmt(s.median)}, std=${fmt(s.std)}, outliers=${s.outlierCount ?? 0}, nulos=${s.nullPct.toFixed(1)}%`;
+  return `únicos=${s.uniqueCount}, moda="${s.mode}", entropía=${fmt(s.entropy)}, nulos=${s.nullPct.toFixed(1)}%`;
+}
+
+function buildChangeLogMarkdown() {
+  const lines = [];
+  lines.push(`# Registro de limpieza de datos — ${state.currentTable || ''}`);
+  lines.push('');
+  lines.push(`- Generado: ${new Date().toLocaleString('es-BO')}`);
+  lines.push(`- Herramienta: DataLens What-If`);
+  lines.push(`- Total de cambios aplicados: ${state.changeLog.length}`);
+  lines.push('');
+  state.changeLog.forEach((batch, i) => {
+    lines.push(`## Cambio ${i + 1} — ${batch.timestamp.toLocaleString('es-BO')}`);
+    lines.push('');
+    lines.push(`Filas: ${batch.rowsBefore.toLocaleString('es-BO')} → ${batch.rowsAfter.toLocaleString('es-BO')}`);
+    lines.push('');
+    batch.changes.forEach(ch => {
+      lines.push(`### Variable: \`${ch.variable}\``);
+      lines.push(`- Técnica aplicada: **${ch.techniqueLabel}**`);
+      if (ch.outlierFlag) lines.push(`- ⚠ Alerta: ${ch.outlierFlag}`);
+      lines.push(`- Antes: ${formatStatsForMd(ch.before)}`);
+      lines.push(`- Después: ${formatStatsForMd(ch.after)}`);
+      lines.push('');
+    });
+    lines.push(`**Impacto estadístico:** ${batch.explanation || '(no generado)'}`);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+
+document.getElementById('btnDownloadLog').addEventListener('click', () => {
+  const md = buildChangeLogMarkdown();
+  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `registro_limpieza_${(state.currentTable || 'dataset').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
 /* ===================== INIT ===================== */
 refreshAiStatusBadge();
+refreshChangeLogButton();
 
 </script>
 </body>
